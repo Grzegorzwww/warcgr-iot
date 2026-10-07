@@ -88,9 +88,22 @@ Dzięki temu możemy później dodawać kolejne urządzenia i czujniki bez przeb
 Mamy też komunikację w drugą stronę:
 FastAPI → MQTT → ESP32
 
-dla przyszłego sterowania:
-piec_gazowy/sterowanie
-piec_weglowy/ruszta/sterowanie
+dla sterowania (kontrakt, który musi obsłużyć ESP32):
+
+| Komenda z panelu (FastAPI → ESP32)        | Potwierdzenie (ESP32 → FastAPI, retained) | Wartości        |
+|-------------------------------------------|-------------------------------------------|-----------------|
+| piec_gazowy/tryb/set                      | piec_gazowy/tryb                          | ON / OFF / AUTO |
+| piec_gazowy/temperatura_zadana/set        | piec_gazowy/temperatura_zadana            | 5–30 °C         |
+| piec_gazowy/histereza/set                 | piec_gazowy/histereza                     | 0.1–5 °C        |
+| piec_gazowy/min_czas_pracy/set            | piec_gazowy/min_czas_pracy                | 0–60 min        |
+| piec_gazowy/min_czas_postoju/set          | piec_gazowy/min_czas_postoju              | 0–60 min        |
+| piec_gazowy/max_temperatura_wody/set      | piec_gazowy/max_temperatura_wody          | 40–90 °C        |
+
+ESP32 po odebraniu `…/set` zapisuje wartość (np. w NVS) i publikuje ją na topicu bez `/set`.
+Panel pokazuje „oczekuje na ESP32…”, dopóki nie przyjdzie potwierdzenie.
+Komendy są wysyłane bez flagi retained, więc ESP32 offline ich nie dostanie.
+Lista parametrów i zakresów jest w `SETTINGS` w `app/main.py`.
+Sterowanie wymaga `CONTROL_TOKEN` w `.env`.
 
 3. Cloudflare
 Cloudflare jest używany głównie do udostępnienia systemu poza domową siecią.

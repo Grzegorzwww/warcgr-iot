@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
 
     <title>Warcgr IoT</title>
 
@@ -14,35 +15,36 @@
 
 <body>
 
+<header class="header">
+    <div>
+        <h1>Warcgr IoT</h1>
+        <p>System grzewczy</p>
+    </div>
+
+    <div id="esp-status" class="status offline">
+        <span class="status-dot"></span>
+        <span id="esp-status-text">OFFLINE</span>
+    </div>
+</header>
+
 <main class="container">
 
-    <header class="header">
-        <div>
-            <h1>Warcgr IoT</h1>
-            <p>System grzewczy</p>
-        </div>
-
-        <div id="esp-status" class="status offline">
-            <span class="status-dot"></span>
-            <span id="esp-status-text">OFFLINE</span>
-        </div>
-    </header>
-
-    <section class="section">
-        <h2>Piec gazowy</h2>
+    <!-- ===== PULPIT ===== -->
+    <section class="tab" data-tab="pulpit">
 
         <div class="cards">
-            <div class="card">
-                <div class="card-label">Temp. wody</div>
-                <div class="card-value">
-                    <span id="water-temp">--</span><span class="unit">°C</span>
-                </div>
-            </div>
-
             <div class="card">
                 <div class="card-label">Temp. otoczenia</div>
                 <div class="card-value">
                     <span id="ambient-temp">--</span><span class="unit">°C</span>
+                </div>
+                <div class="card-sub" id="ambient-sub"></div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Temp. wody</div>
+                <div class="card-value">
+                    <span id="water-temp">--</span><span class="unit">°C</span>
                 </div>
             </div>
 
@@ -54,48 +56,62 @@
             </div>
 
             <div class="card">
-                <div class="card-label">Stan pieca</div>
+                <div class="card-label">Piec gazowy</div>
                 <div id="boiler-state" class="badge">--</div>
             </div>
-
-            <div class="card">
-                <div class="card-label">Tryb</div>
-                <div id="boiler-mode" class="badge">--</div>
-            </div>
         </div>
-    </section>
-
-    <section id="control-section" class="section" hidden>
-        <h2>Sterowanie</h2>
 
         <div class="panel">
+            <h2>Sterowanie</h2>
+
+            <div class="note" id="control-note" hidden></div>
+
             <div class="control-label">Tryb pracy</div>
-            <div class="segmented" id="mode-buttons">
-                <button type="button" data-command="AUTO">AUTO</button>
-                <button type="button" data-command="MANUAL">MANUAL</button>
+            <div class="segmented modes" id="mode-buttons">
+                <button type="button" class="needs-control" data-mode="ON">ON</button>
+                <button type="button" class="needs-control" data-mode="OFF">OFF</button>
+                <button type="button" class="needs-control" data-mode="AUTO">AUTO</button>
             </div>
 
-            <div class="control-label">Piec</div>
-            <div class="control-row">
-                <button type="button" class="btn btn-on" data-command="ON">Włącz</button>
-                <button type="button" class="btn btn-off" data-command="OFF">Wyłącz</button>
+            <div id="setpoint-box" hidden>
+                <div class="control-label">
+                    Temperatura zadana
+                    <span class="setting-current" data-current="temperatura_zadana"></span>
+                </div>
+                <div id="setpoint-stepper"></div>
+                <button type="button" id="setpoint-apply" class="btn btn-primary needs-control" hidden>
+                    Ustaw temperaturę
+                </button>
             </div>
-
-            <button type="button" id="logout-btn" class="link-btn">Wyloguj sterowanie</button>
         </div>
+
+        <div class="panel">
+            <h2>Piec węglowy</h2>
+            <div class="row">
+                <span class="card-label">Ruszt</span>
+                <span id="grate-state" class="badge">--</span>
+            </div>
+        </div>
+
+        <footer>
+            Ostatnia aktualizacja: <span id="last-update">--</span>
+        </footer>
     </section>
 
-    <section class="section">
-        <div class="section-head">
-            <h2>Wykresy</h2>
+    <!-- ===== WYKRESY ===== -->
+    <section class="tab" data-tab="wykresy" hidden>
 
-            <div class="segmented small" id="range-buttons">
-                <button type="button" data-hours="1">1h</button>
-                <button type="button" data-hours="6">6h</button>
-                <button type="button" data-hours="24" class="active">24h</button>
-                <button type="button" data-hours="72">3d</button>
-                <button type="button" data-hours="168">7d</button>
-            </div>
+        <div class="segmented small" id="range-buttons">
+            <button type="button" data-hours="1">1h</button>
+            <button type="button" data-hours="6">6h</button>
+            <button type="button" data-hours="24" class="active">24h</button>
+            <button type="button" data-hours="72">3d</button>
+            <button type="button" data-hours="168">7d</button>
+        </div>
+
+        <div class="panel">
+            <h3>Temperatura otoczenia i zadana</h3>
+            <div class="chart-box"><canvas id="chart-ambient"></canvas></div>
         </div>
 
         <div class="panel">
@@ -104,28 +120,64 @@
         </div>
 
         <div class="panel">
-            <h3>Otoczenie i wilgotność</h3>
-            <div class="chart-box"><canvas id="chart-ambient"></canvas></div>
+            <h3>Wilgotność</h3>
+            <div class="chart-box"><canvas id="chart-humidity"></canvas></div>
         </div>
     </section>
 
-    <section class="section">
-        <h2>Piec węglowy</h2>
+    <!-- ===== USTAWIENIA ===== -->
+    <section class="tab" data-tab="ustawienia" hidden>
 
-        <div class="cards">
-            <div class="card">
-                <div class="card-label">Ruszt</div>
-                <div id="grate-state" class="badge">--</div>
+        <div class="panel">
+            <h2>Dostęp do sterowania</h2>
+
+            <p class="muted" id="access-disabled" hidden>
+                Sterowanie jest wyłączone na serwerze (brak <code>CONTROL_TOKEN</code> w <code>.env</code>).
+            </p>
+
+            <form id="access-locked" hidden>
+                <label class="control-label" for="token-input">Token sterowania</label>
+                <input id="token-input" class="text-input" type="password"
+                       autocomplete="current-password" placeholder="Wpisz token">
+                <input type="text" name="username" value="warcgr" autocomplete="username" hidden>
+                <button type="submit" class="btn btn-primary">Odblokuj</button>
+            </form>
+
+            <div id="access-unlocked" hidden>
+                <p class="ok-text">Sterowanie odblokowane na tym urządzeniu.</p>
+                <button type="button" id="logout-btn" class="btn btn-secondary">Zablokuj</button>
             </div>
         </div>
+
+        <div class="panel">
+            <h2>Regulacja – piec gazowy</h2>
+
+            <div class="note" id="settings-note" hidden></div>
+
+            <div id="settings-list"></div>
+
+            <button type="button" id="settings-save" class="btn btn-primary" disabled>
+                Zapisz zmiany
+            </button>
+        </div>
     </section>
 
-    <footer>
-        <span>Ostatnia aktualizacja:</span>
-        <span id="last-update">--</span>
-    </footer>
-
 </main>
+
+<nav class="tabbar">
+    <a href="#pulpit">
+        <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
+        Pulpit
+    </a>
+    <a href="#wykresy">
+        <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-6"/></svg>
+        Wykresy
+    </a>
+    <a href="#ustawienia">
+        <svg viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+        Ustawienia
+    </a>
+</nav>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

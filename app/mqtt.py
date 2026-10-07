@@ -54,6 +54,10 @@ def on_message(client, userdata, msg):
 
     print(f"MQTT: {topic} = {payload}")
 
+    # Własne komendy (…/set) to nie są pomiary ani stan urządzenia
+    if topic.endswith("/set"):
+        return
+
     # Status tekstowy
     state[topic] = payload
 
