@@ -1,7 +1,13 @@
 import asyncio
+import hmac
+import math
+import os
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
 
 from app.database import (
     init_db,
@@ -9,11 +15,22 @@ from app.database import (
     delete_old_measurements,
 )
 
-from app.mqtt import state, start_mqtt_thread
+from app.mqtt import state, start_mqtt_thread, publish_command
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+
+
+load_dotenv()
+
+# Sterowanie jest wyłączone, dopóki nie ustawisz CONTROL_TOKEN w .env
+CONTROL_TOKEN = os.getenv("CONTROL_TOKEN")
+
+# Dozwolone urządzenia -> topic MQTT z komendami
+CONTROL_TOPICS = {
+    "piec_gazowy": "piec_gazowy/sterowanie",
+}
 
 
 app = FastAPI(title="warcgr")
@@ -52,7 +69,13 @@ async def status():
 
 
 @app.get("/api/history")
-async def history(topic: str, hours: int = 24):
+async def history(topic: str, hours: int = 24, max_points: int = 300):
+    if max_points < 10 or max_points > 2000:
+        raise HTTPException(
+            status_code=400,
+            detail="max_points must be between 10 and 2000"
+        )
+
     if hours < 1 or hours > 168:
         raise HTTPException(
             status_code=400,
@@ -66,8 +89,54 @@ async def history(topic: str, hours: int = 24):
     return {
         "topic": topic,
         "hours": hours,
-        "data": data,
+        "data": downsample(data, max_points),
     }
+
+
+def downsample(data, max_points: int):
+    if len(data) <= max_points:
+        return data
+
+    chunk = math.ceil(len(data) / max_points)
+    result = []
+
+    for i in range(0, len(data), chunk):
+        part = data[i:i + chunk]
+        result.append({
+            "timestamp": part[-1]["timestamp"],
+            "value": sum(p["value"] for p in part) / len(part),
+        })
+
+    return result
+
+
+class ControlRequest(BaseModel):
+    device: Literal["piec_gazowy"]
+    command: Literal["ON", "OFF", "AUTO", "MANUAL"]
+
+
+@app.get("/api/config")
+async def config():
+    return {"control_enabled": bool(CONTROL_TOKEN)}
+
+
+@app.post("/api/control")
+async def control(
+    request: ControlRequest,
+    x_control_token: str = Header(default=""),
+):
+    if not CONTROL_TOKEN:
+        raise HTTPException(status_code=503, detail="Sterowanie wyłączone")
+
+    if not hmac.compare_digest(
+        x_control_token.encode(), CONTROL_TOKEN.encode()
+    ):
+        raise HTTPException(status_code=401, detail="Nieprawidłowy token")
+
+    if not publish_command(CONTROL_TOPICS[request.device], request.command):
+        raise HTTPException(status_code=503, detail="Brak połączenia z MQTT")
+
+    return {"ok": True}
 
 async def cleanup_loop():
     while True:

@@ -31,6 +31,9 @@ state = {}
 # Event loop FastAPI/asyncio
 _loop = None
 
+# Klient MQTT (do publikowania komend)
+_client = None
+
 
 def set_event_loop(loop):
     global _loop
@@ -85,10 +88,22 @@ def create_client():
     return client
 
 
+def publish_command(topic: str, payload: str) -> bool:
+    if _client is None or not _client.is_connected():
+        return False
+
+    info = _client.publish(topic, payload, qos=1)
+
+    return info.rc == mqtt.MQTT_ERR_SUCCESS
+
+
 def start_mqtt(loop):
+    global _client
+
     set_event_loop(loop)
 
     client = create_client()
+    _client = client
 
     client.connect(
         MQTT_HOST,

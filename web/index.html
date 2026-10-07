@@ -2,11 +2,14 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
 
     <title>Warcgr IoT</title>
 
     <link rel="stylesheet" href="/web/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+    <script src="/web/app.js" defer></script>
 </head>
 
 <body>
@@ -25,69 +28,97 @@
         </div>
     </header>
 
-
     <section class="section">
         <h2>Piec gazowy</h2>
 
         <div class="cards">
-
             <div class="card">
-                <div class="card-label">Temperatura wody</div>
+                <div class="card-label">Temp. wody</div>
                 <div class="card-value">
-                    <span id="water-temp">--</span>
-                    <span class="unit">°C</span>
+                    <span id="water-temp">--</span><span class="unit">°C</span>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-label">Temperatura otoczenia</div>
+                <div class="card-label">Temp. otoczenia</div>
                 <div class="card-value">
-                    <span id="ambient-temp">--</span>
-                    <span class="unit">°C</span>
+                    <span id="ambient-temp">--</span><span class="unit">°C</span>
                 </div>
             </div>
 
             <div class="card">
                 <div class="card-label">Wilgotność</div>
                 <div class="card-value">
-                    <span id="humidity">--</span>
-                    <span class="unit">%</span>
+                    <span id="humidity">--</span><span class="unit">%</span>
                 </div>
             </div>
 
             <div class="card">
                 <div class="card-label">Stan pieca</div>
-                <div id="boiler-state" class="state-value">
-                    --
-                </div>
+                <div id="boiler-state" class="badge">--</div>
             </div>
 
             <div class="card">
                 <div class="card-label">Tryb</div>
-                <div id="boiler-mode" class="state-value">
-                    --
-                </div>
+                <div id="boiler-mode" class="badge">--</div>
             </div>
-
         </div>
     </section>
 
+    <section id="control-section" class="section" hidden>
+        <h2>Sterowanie</h2>
+
+        <div class="panel">
+            <div class="control-label">Tryb pracy</div>
+            <div class="segmented" id="mode-buttons">
+                <button type="button" data-command="AUTO">AUTO</button>
+                <button type="button" data-command="MANUAL">MANUAL</button>
+            </div>
+
+            <div class="control-label">Piec</div>
+            <div class="control-row">
+                <button type="button" class="btn btn-on" data-command="ON">Włącz</button>
+                <button type="button" class="btn btn-off" data-command="OFF">Wyłącz</button>
+            </div>
+
+            <button type="button" id="logout-btn" class="link-btn">Wyloguj sterowanie</button>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-head">
+            <h2>Wykresy</h2>
+
+            <div class="segmented small" id="range-buttons">
+                <button type="button" data-hours="1">1h</button>
+                <button type="button" data-hours="6">6h</button>
+                <button type="button" data-hours="24" class="active">24h</button>
+                <button type="button" data-hours="72">3d</button>
+                <button type="button" data-hours="168">7d</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>Temperatura wody</h3>
+            <div class="chart-box"><canvas id="chart-water"></canvas></div>
+        </div>
+
+        <div class="panel">
+            <h3>Otoczenie i wilgotność</h3>
+            <div class="chart-box"><canvas id="chart-ambient"></canvas></div>
+        </div>
+    </section>
 
     <section class="section">
         <h2>Piec węglowy</h2>
 
         <div class="cards">
-
             <div class="card">
                 <div class="card-label">Ruszt</div>
-                <div id="grate-state" class="state-value">
-                    --
-                </div>
+                <div id="grate-state" class="badge">--</div>
             </div>
-
         </div>
     </section>
-
 
     <footer>
         <span>Ostatnia aktualizacja:</span>
@@ -96,7 +127,7 @@
 
 </main>
 
-<script src="/web/app.js"></script>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 </body>
 </html>
