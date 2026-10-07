@@ -3,7 +3,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException
 
-from app.database import init_db, get_history
+from app.database import (
+    init_db,
+    get_history,
+    delete_old_measurements,
+)
+
 from app.mqtt import state, start_mqtt_thread
 
 
@@ -14,8 +19,13 @@ app = FastAPI(title="Warcgr IoT")
 async def startup():
     await init_db()
 
+    await delete_old_measurements(7)
+
     loop = asyncio.get_running_loop()
+
     start_mqtt_thread(loop)
+
+    asyncio.create_task(cleanup_loop())
 
 
 @app.get("/")
@@ -48,3 +58,13 @@ async def history(topic: str, hours: int = 24):
         "hours": hours,
         "data": data,
     }
+
+async def cleanup_loop():
+    while True:
+        try:
+            await delete_old_measurements(7)
+            print("Database cleanup completed")
+        except Exception as e:
+            print("Database cleanup error:", e)
+
+        await asyncio.sleep(3600)

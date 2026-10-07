@@ -1,6 +1,6 @@
 import aiosqlite
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -67,7 +67,7 @@ async def get_history(topic: str, since: datetime):
         }
         for timestamp, value in rows
     ]
-    
+
 async def delete_old_measurements(days: int = 7):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
