@@ -11,8 +11,21 @@ from app.database import (
 
 from app.mqtt import state, start_mqtt_thread
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
 
-app = FastAPI(title="Warcgr IoT")
+
+app = FastAPI(title="warcgr")
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+app.mount(
+    "/web",
+    StaticFiles(directory=BASE_DIR / "web"),
+    name="web",
+)
 
 
 @app.on_event("startup")
@@ -30,10 +43,7 @@ async def startup():
 
 @app.get("/")
 async def root():
-    return {
-        "status": "ok",
-        "service": "Warcgr IoT",
-    }
+    return FileResponse(BASE_DIR / "web" / "index.html")
 
 
 @app.get("/api/status")

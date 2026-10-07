@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Warcgr IoT</title>
+
+    <link rel="stylesheet" href="/web/style.css">
+</head>
+
+<body>
+
+<main class="container">
+
+    <header class="header">
+        <div>
+            <h1>Warcgr IoT</h1>
+            <p>System grzewczy</p>
+        </div>
+
+        <div id="esp-status" class="status offline">
+            <span class="status-dot"></span>
+            <span id="esp-status-text">OFFLINE</span>
+        </div>
+    </header>
+
+
+    <section class="section">
+        <h2>Piec gazowy</h2>
+
+        <div class="cards">
+
+            <div class="card">
+                <div class="card-label">Temperatura wody</div>
+                <div class="card-value">
+                    <span id="water-temp">--</span>
+                    <span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Temperatura otoczenia</div>
+                <div class="card-value">
+                    <span id="ambient-temp">--</span>
+                    <span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Wilgotność</div>
+                <div class="card-value">
+                    <span id="humidity">--</span>
+                    <span class="unit">%</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Stan pieca</div>
+                <div id="boiler-state" class="state-value">
+                    --
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Tryb</div>
+                <div id="boiler-mode" class="state-value">
+                    --
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+
+    <section class="section">
+        <h2>Piec węglowy</h2>
+
+        <div class="cards">
+
+            <div class="card">
+                <div class="card-label">Ruszt</div>
+                <div id="grate-state" class="state-value">
+                    --
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+
+    <footer>
+        <span>Ostatnia aktualizacja:</span>
+        <span id="last-update">--</span>
+    </footer>
+
+</main>
+
+<script src="/web/app.js"></script>
+
+</body>
+</html>
