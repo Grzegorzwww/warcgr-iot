@@ -8,9 +8,9 @@
 
     <title>Warcgr IoT</title>
 
-    <link rel="stylesheet" href="/web/style.css">
+    <link rel="stylesheet" href="/web/style.css?v=__V__">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
-    <script src="/web/app.js" defer></script>
+    <script src="/web/app.js?v=__V__" defer></script>
 </head>
 
 <body>
@@ -72,13 +72,12 @@
                 <button type="button" class="needs-control" data-mode="OFF">OFF</button>
                 <button type="button" class="needs-control" data-mode="AUTO">AUTO</button>
             </div>
+            <div id="mode-status" class="status-line"></div>
 
             <div id="setpoint-box" hidden>
-                <div class="control-label">
-                    Temperatura zadana
-                    <span class="setting-current" data-current="temperatura_zadana"></span>
-                </div>
+                <div class="control-label">Temperatura zadana</div>
                 <div id="setpoint-stepper"></div>
+                <div class="status-line" data-current="temperatura_zadana"></div>
                 <button type="button" id="setpoint-apply" class="btn btn-primary needs-control" hidden>
                     Ustaw temperaturę
                 </button>
@@ -166,15 +165,15 @@
 
 <nav class="tabbar">
     <a href="#pulpit">
-        <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
+        <svg width="24" height="24" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>
         Pulpit
     </a>
     <a href="#wykresy">
-        <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-6"/></svg>
+        <svg width="24" height="24" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-6"/></svg>
         Wykresy
     </a>
     <a href="#ustawienia">
-        <svg viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
+        <svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>
         Ustawienia
     </a>
 </nav>

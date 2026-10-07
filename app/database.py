@@ -26,7 +26,48 @@ async def init_db():
             ON measurements(topic, timestamp)
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
         await db.commit()
+
+
+async def save_setting(key: str, value: str):
+    updated_at = datetime.now(timezone.utc).isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, updated_at)
+        )
+
+        await db.commit()
+
+
+async def get_settings():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT key, value, updated_at FROM settings"
+        )
+
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+    return {
+        key: {"value": value, "updated_at": updated_at}
+        for key, value, updated_at in rows
+    }
 
 
 async def save_measurement(topic: str, value: float):

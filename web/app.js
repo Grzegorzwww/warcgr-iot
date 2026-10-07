@@ -5,7 +5,6 @@ const TOPICS = {
     ambientTemp: "piec_gazowy/temperatura_otoczenia",
     humidity: "piec_gazowy/wilgotnosc",
     boilerState: "piec_gazowy/stan",
-    boilerMode: "piec_gazowy/tryb",
     setpoint: "piec_gazowy/temperatura_zadana",
     espStatus: "piec_gazowy/status_esp32",
     grateState: "piec_weglowy/ruszta"
@@ -18,13 +17,14 @@ const CHART_INTERVAL_MS = 60000;
 const PENDING_TIMEOUT_MS = 20000;
 
 let config = { control_enabled: false, modes: [], settings: {} };
-let lastState = {};
+let lastState = {};     // ostatnie wartości z MQTT (to, co raportuje ESP32)
+let desired = {};       // ostatnio ustawione z panelu (zapisane na serwerze)
 let selectedHours = 24;
 let currentTab = "pulpit";
 
+const pending = {};     // klucz -> termin (ms) oczekiwania na potwierdzenie
 const charts = {};
 const steppers = {};
-const pending = {};
 
 
 /* ---------- Pomocnicze ---------- */
@@ -74,18 +74,98 @@ function toast(message, isError = false) {
 }
 
 
+async function fetchJson(url) {
+    const response = await fetch(url, { cache: "no-store" });
+
+    if (!response.ok) {
+        throw new Error(`${url}: HTTP ${response.status}`);
+    }
+
+    return response.json();
+}
+
+
 function getToken() {
     return localStorage.getItem(TOKEN_KEY);
 }
 
 
 function isEspOnline() {
-    return lastState[TOPICS.espStatus] === "online";
+    return String(lastState[TOPICS.espStatus] ?? "").trim().toLowerCase() === "online";
 }
 
 
-function canControl() {
-    return config.control_enabled && Boolean(getToken()) && isEspOnline();
+/* ---------- Ustawione vs. potwierdzone ---------- */
+
+function normalize(key, value) {
+    if (value === undefined || value === null || value === "") {
+        return undefined;
+    }
+
+    if (key === "tryb") {
+        return String(value).trim().toUpperCase();
+    }
+
+    const n = parseNum(value);
+
+    return isNaN(n) ? undefined : n;
+}
+
+
+// Zwraca { value, reported, state }:
+//   confirmed   – ESP32 raportuje to samo, co ustawiono
+//   pending     – wysłano, czekamy na potwierdzenie
+//   unconfirmed – ustawiono, ale ESP32 raportuje coś innego / nic
+//   reported    – nic nie ustawiano z panelu, jest tylko odczyt z ESP32
+//   none        – brak danych
+function keyStatus(key) {
+    const want = normalize(key, desired[key]?.value);
+    const have = normalize(key, lastState[`${DEVICE}/${key}`]);
+
+    const same = want !== undefined && have !== undefined && (
+        key === "tryb" ? want === have : Math.abs(want - have) < 1e-3
+    );
+
+    if (same || (pending[key] && Date.now() > pending[key])) {
+        delete pending[key];
+    }
+
+    let state;
+
+    if (want === undefined) {
+        state = have === undefined ? "none" : "reported";
+    } else if (same) {
+        state = "confirmed";
+    } else if (pending[key]) {
+        state = "pending";
+    } else {
+        state = "unconfirmed";
+    }
+
+    return { value: want ?? have, reported: have, state };
+}
+
+
+const STATE_TEXT = {
+    confirmed: "Potwierdzone przez ESP32",
+    pending: "Wysłano – czekam na ESP32…",
+    unconfirmed: "ESP32 nie potwierdził",
+    reported: "Odczyt z ESP32",
+    none: ""
+};
+
+
+function renderStatusLine(el, info, format) {
+    let text = STATE_TEXT[info.state];
+
+    if (info.state === "unconfirmed") {
+        text += info.reported !== undefined
+            ? ` (raportuje ${format(info.reported)})`
+            : " (brak odpowiedzi)";
+    }
+
+    el.className = "status-line " + info.state;
+    el.textContent = text;
 }
 
 
@@ -140,6 +220,7 @@ function createStepper(key, schema) {
     input.inputMode = "decimal";
     input.autocomplete = "off";
     input.className = "needs-control";
+    input.placeholder = schema.default ?? "";
 
     const unit = document.createElement("span");
     unit.className = "unit";
@@ -168,14 +249,12 @@ function createStepper(key, schema) {
         let v = parseNum(input.value);
 
         if (isNaN(v)) {
-            v = parseNum(lastState[`${DEVICE}/${key}`]);
+            v = keyStatus(key).value;
         }
 
-        if (isNaN(v)) {
-            v = schema.min;
-        } else {
-            v = clamp(v + direction * schema.step);
-        }
+        v = v === undefined || isNaN(v)
+            ? clamp(schema.default ?? schema.min)
+            : clamp(Math.round((v + direction * schema.step) / schema.step) * schema.step);
 
         input.value = fmt(v);
         stepper.setDirty(true);
@@ -222,31 +301,18 @@ function readStepper(key) {
 
 function syncStepper(key) {
     const s = steppers[key];
-    const raw = parseNum(lastState[`${DEVICE}/${key}`]);
-    const p = pending[key];
-
-    if (p) {
-        if (!isNaN(raw) && Math.abs(raw - p.value) < 1e-3) {
-            delete pending[key];
-        } else if (Date.now() > p.until) {
-            delete pending[key];
-            toast(`ESP32 nie potwierdził: ${s.schema.label}`, true);
-        }
-    }
-
-    const currentText = pending[key]
-        ? "oczekuje na ESP32…"
-        : `aktualnie: ${isNaN(raw) ? "--" : s.fmt(raw) + " " + s.schema.unit}`;
+    const info = keyStatus(key);
+    const format = v => `${s.fmt(v)} ${s.schema.unit}`;
 
     document.querySelectorAll(`[data-current="${key}"]`).forEach(el => {
-        el.textContent = currentText;
+        renderStatusLine(el, info, format);
     });
 
-    if (pending[key] || s.dirty || document.activeElement === s.input) {
+    if (s.dirty || document.activeElement === s.input) {
         return;
     }
 
-    s.input.value = isNaN(raw) ? "" : s.fmt(raw);
+    s.input.value = info.value === undefined ? "" : s.fmt(info.value);
 }
 
 
@@ -272,7 +338,7 @@ function buildSettings() {
         label.textContent = schema.label;
 
         const current = document.createElement("span");
-        current.className = "setting-current";
+        current.className = "status-line";
         current.dataset.current = key;
 
         head.append(label, current);
@@ -313,11 +379,10 @@ function controlBlockReason() {
 
 
 function updateControls() {
-    const enabled = canControl();
     const reason = controlBlockReason();
 
     document.querySelectorAll(".needs-control").forEach(el => {
-        el.disabled = !enabled;
+        el.disabled = Boolean(reason);
     });
 
     for (const id of ["control-note", "settings-note"]) {
@@ -328,7 +393,7 @@ function updateControls() {
     const setpoint = steppers.temperatura_zadana;
     $("setpoint-apply").hidden = !(setpoint && setpoint.dirty);
 
-    $("settings-save").disabled = !enabled
+    $("settings-save").disabled = Boolean(reason)
         || !advancedKeys().some(key => steppers[key]?.dirty);
 }
 
@@ -344,39 +409,34 @@ function renderAccess() {
 }
 
 
-/* ---------- Tryb pracy ---------- */
+function syncMode() {
+    const info = keyStatus("tryb");
 
-function displayedMode() {
-    return pending.tryb
-        ? pending.tryb.value
-        : String(lastState[TOPICS.boilerMode] ?? "").toUpperCase();
+    document.querySelectorAll("#mode-buttons button").forEach(btn => {
+        const selected = btn.dataset.mode === info.value;
+
+        btn.classList.toggle("active", selected);
+        btn.classList.toggle("pending", selected && info.state === "pending");
+        btn.classList.toggle("unconfirmed", selected && info.state === "unconfirmed");
+        btn.setAttribute("aria-pressed", String(selected));
+    });
+
+    renderStatusLine($("mode-status"), info, v => v);
+
+    $("setpoint-box").hidden = info.value !== "AUTO";
+
+    const setpoint = keyStatus("temperatura_zadana").value;
+
+    $("ambient-sub").textContent = info.value === "AUTO" && setpoint !== undefined
+        ? `zadana ${setpoint.toFixed(1)} °C`
+        : "";
 }
 
 
-function syncMode() {
-    const reported = String(lastState[TOPICS.boilerMode] ?? "").toUpperCase();
-    const p = pending.tryb;
-
-    if (p && reported === p.value) {
-        delete pending.tryb;
-    } else if (p && Date.now() > p.until) {
-        delete pending.tryb;
-        toast("ESP32 nie potwierdził zmiany trybu", true);
-    }
-
-    const mode = displayedMode();
-
-    document.querySelectorAll("#mode-buttons button").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.mode === mode);
-        btn.classList.toggle("pending", Boolean(pending.tryb) && btn.dataset.mode === mode);
-    });
-
-    $("setpoint-box").hidden = mode !== "AUTO";
-
-    const setpoint = lastState[TOPICS.setpoint];
-    $("ambient-sub").textContent = mode === "AUTO" && setpoint !== undefined
-        ? `zadana ${formatNumber(setpoint)} °C`
-        : "";
+function renderControls() {
+    syncMode();
+    Object.keys(steppers).forEach(syncStepper);
+    updateControls();
 }
 
 
@@ -390,6 +450,24 @@ async function sendSetting(key, value) {
         return false;
     }
 
+    // Od razu pokazujemy wybór, cofamy przy błędzie
+    const previous = desired[key];
+
+    desired[key] = { value: String(value) };
+    pending[key] = Date.now() + PENDING_TIMEOUT_MS;
+    renderControls();
+
+    const revert = () => {
+        if (previous === undefined) {
+            delete desired[key];
+        } else {
+            desired[key] = previous;
+        }
+
+        delete pending[key];
+        renderControls();
+    };
+
     try {
         const response = await fetch("/api/set", {
             method: "POST",
@@ -401,6 +479,7 @@ async function sendSetting(key, value) {
         });
 
         if (response.status === 401) {
+            revert();
             localStorage.removeItem(TOKEN_KEY);
             renderAccess();
             toast("Token nieprawidłowy – odblokuj ponownie", true);
@@ -408,18 +487,18 @@ async function sendSetting(key, value) {
         }
 
         if (!response.ok) {
+            revert();
             const err = await response.json().catch(() => ({}));
             toast(typeof err.detail === "string" ? err.detail : "Błąd wysyłania", true);
             return false;
         }
-
-        pending[key] = { value, until: Date.now() + PENDING_TIMEOUT_MS };
 
         setTimeout(loadStatus, 1500);
 
         return true;
 
     } catch (error) {
+        revert();
         toast("Brak połączenia z serwerem", true);
         return false;
     }
@@ -427,17 +506,14 @@ async function sendSetting(key, value) {
 
 
 async function onModeClick(mode) {
-    if (mode === displayedMode()) {
-        return;
-    }
+    const info = keyStatus("tryb");
 
-    if (!confirm(`Zmienić tryb pieca na ${mode}?`)) {
+    if (mode === info.value && info.state !== "unconfirmed") {
         return;
     }
 
     if (await sendSetting("tryb", mode)) {
-        toast(`Wysłano tryb ${mode}`);
-        syncMode();
+        toast(`Tryb ${mode} wysłany`);
     }
 }
 
@@ -449,10 +525,12 @@ async function applySetpoint() {
         return;
     }
 
+    steppers.temperatura_zadana.setDirty(false);
+
     if (await sendSetting("temperatura_zadana", value)) {
-        steppers.temperatura_zadana.setDirty(false);
-        syncStepper("temperatura_zadana");
-        toast(`Wysłano temperaturę ${steppers.temperatura_zadana.fmt(value)} °C`);
+        toast(`Temperatura ${steppers.temperatura_zadana.fmt(value)} °C wysłana`);
+    } else {
+        steppers.temperatura_zadana.setDirty(true);
     }
 }
 
@@ -476,12 +554,13 @@ async function saveSettings() {
     let sent = 0;
 
     for (const key of keys) {
+        steppers[key].setDirty(false);
+
         if (!await sendSetting(key, values[key])) {
+            steppers[key].setDirty(true);
             break;
         }
 
-        steppers[key].setDirty(false);
-        syncStepper(key);
         sent++;
     }
 
@@ -560,41 +639,40 @@ function updateEspStatus() {
 }
 
 
-function updateDashboard(data) {
-    lastState = data;
-
-    setText("water-temp", formatNumber(data[TOPICS.waterTemp]));
-    setText("ambient-temp", formatNumber(data[TOPICS.ambientTemp]));
-    setText("humidity", formatNumber(data[TOPICS.humidity]));
-
-    setBadge("boiler-state", data[TOPICS.boilerState]);
-    setBadge("grate-state", data[TOPICS.grateState]);
-
-    updateEspStatus();
-    syncMode();
-    Object.keys(steppers).forEach(syncStepper);
-    updateControls();
-
-    setText("last-update", new Date().toLocaleTimeString("pl-PL"));
-}
-
-
 async function loadStatus() {
     try {
-        const response = await fetch("/api/status");
+        lastState = await fetchJson("/api/status");
+    } catch (error) {
+        console.error("Błąd pobierania statusu:", error);
+        lastState = {};
+    }
 
-        if (!response.ok) {
-            throw new Error("HTTP " + response.status);
+    try {
+        const serverDesired = await fetchJson("/api/desired");
+
+        // Nie nadpisujemy wyboru, który właśnie jest wysyłany
+        for (const key of Object.keys(pending)) {
+            if (desired[key]) {
+                serverDesired[key] = desired[key];
+            }
         }
 
-        updateDashboard(await response.json());
-
+        desired = serverDesired;
     } catch (error) {
-        console.error("Błąd pobierania danych:", error);
-        lastState = {};
-        updateEspStatus();
-        updateControls();
+        console.error("Błąd pobierania ustawień:", error);
     }
+
+    setText("water-temp", formatNumber(lastState[TOPICS.waterTemp]));
+    setText("ambient-temp", formatNumber(lastState[TOPICS.ambientTemp]));
+    setText("humidity", formatNumber(lastState[TOPICS.humidity]));
+
+    setBadge("boiler-state", lastState[TOPICS.boilerState]);
+    setBadge("grate-state", lastState[TOPICS.grateState]);
+
+    updateEspStatus();
+    renderControls();
+
+    setText("last-update", new Date().toLocaleTimeString("pl-PL"));
 }
 
 
@@ -608,10 +686,9 @@ function parseTime(ts) {
 
 function formatTick(ms) {
     const d = new Date(ms);
-    const time = d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
 
     if (selectedHours <= 24) {
-        return time;
+        return d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
     }
 
     return d.toLocaleDateString("pl-PL", { day: "2-digit", month: "2-digit" });
@@ -705,16 +782,10 @@ function initCharts() {
 
 
 async function fetchHistory(topic) {
-    const url = `/api/history?topic=${encodeURIComponent(topic)}`
-        + `&hours=${selectedHours}&max_points=300`;
-
-    const response = await fetch(url);
-
-    if (!response.ok) {
-        throw new Error("HTTP " + response.status);
-    }
-
-    const json = await response.json();
+    const json = await fetchJson(
+        `/api/history?topic=${encodeURIComponent(topic)}`
+        + `&hours=${selectedHours}&max_points=300`
+    );
 
     return json.data
         .map(p => ({ x: parseTime(p.timestamp), y: p.value }))
@@ -790,11 +861,7 @@ function initRangeButtons() {
 
 async function loadConfig() {
     try {
-        const response = await fetch("/api/config");
-
-        if (response.ok) {
-            config = await response.json();
-        }
+        config = await fetchJson("/api/config");
     } catch (error) {
         console.error("Błąd pobierania konfiguracji:", error);
     }
@@ -805,6 +872,9 @@ async function loadConfig() {
 
 
 window.addEventListener("DOMContentLoaded", async () => {
+    window.addEventListener("hashchange", showTab);
+    showTab();
+
     initCharts();
     initRangeButtons();
 
@@ -817,11 +887,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("access-locked").addEventListener("submit", unlock);
     $("logout-btn").addEventListener("click", lock);
 
-    window.addEventListener("hashchange", showTab);
-    showTab();
-
     await loadConfig();
     await loadStatus();
+
+    if (currentTab === "wykresy") {
+        loadCharts();
+    }
 
     setInterval(loadStatus, STATUS_INTERVAL_MS);
 

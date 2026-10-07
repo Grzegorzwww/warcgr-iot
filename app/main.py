@@ -13,12 +13,15 @@ from app.database import (
     init_db,
     get_history,
     delete_old_measurements,
+    save_setting,
+    get_settings,
 )
 
 from app.mqtt import state, start_mqtt_thread, publish_command
 
+from fastapi import Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from pathlib import Path
 
 
@@ -42,6 +45,7 @@ SETTINGS = {
         "min": 5,
         "max": 30,
         "step": 0.5,
+        "default": 21,
         "group": "main",
     },
     "histereza": {
@@ -52,6 +56,7 @@ SETTINGS = {
         "min": 0.1,
         "max": 5,
         "step": 0.1,
+        "default": 0.5,
         "group": "advanced",
     },
     "min_czas_pracy": {
@@ -61,6 +66,7 @@ SETTINGS = {
         "min": 0,
         "max": 60,
         "step": 1,
+        "default": 5,
         "group": "advanced",
     },
     "min_czas_postoju": {
@@ -70,6 +76,7 @@ SETTINGS = {
         "min": 0,
         "max": 60,
         "step": 1,
+        "default": 5,
         "group": "advanced",
     },
     "max_temperatura_wody": {
@@ -80,6 +87,7 @@ SETTINGS = {
         "min": 40,
         "max": 90,
         "step": 1,
+        "default": 80,
         "group": "advanced",
     },
 }
@@ -89,10 +97,23 @@ app = FastAPI(title="warcgr")
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+WEB_DIR = BASE_DIR / "web"
+
+
+# Bez tego Cloudflare/przeglądarka trzymają stare app.js/style.css
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    response = await call_next(request)
+
+    if request.url.path == "/" or request.url.path.startswith("/web/"):
+        response.headers["Cache-Control"] = "no-cache"
+
+    return response
+
 
 app.mount(
     "/web",
-    StaticFiles(directory=BASE_DIR / "web"),
+    StaticFiles(directory=WEB_DIR),
     name="web",
 )
 
@@ -112,7 +133,16 @@ async def startup():
 
 @app.get("/")
 async def root():
-    return FileResponse(BASE_DIR / "web" / "index.html")
+    # Wersja plików w URL (?v=...) wymusza pobranie nowych po każdej zmianie
+    version = int(max(p.stat().st_mtime for p in WEB_DIR.iterdir()))
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+
+    return HTMLResponse(html.replace("__V__", str(version)))
+
+
+@app.get("/api/desired")
+async def desired():
+    return await get_settings()
 
 
 @app.get("/api/status")
@@ -228,7 +258,9 @@ async def set_value(
     if not publish_command(f"{DEVICE}/{request.key}/set", payload):
         raise HTTPException(status_code=503, detail="Brak połączenia z MQTT")
 
-    return {"ok": True}
+    await save_setting(request.key, payload)
+
+    return {"ok": True, "value": payload}
 
 
 async def cleanup_loop():
