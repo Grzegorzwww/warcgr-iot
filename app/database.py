@@ -67,3 +67,16 @@ async def get_history(topic: str, since: datetime):
         }
         for timestamp, value in rows
     ]
+    
+async def delete_old_measurements(days: int = 7):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            DELETE FROM measurements
+            WHERE timestamp < ?
+            """,
+            (cutoff.isoformat(),)
+        )
+        await db.commit()
