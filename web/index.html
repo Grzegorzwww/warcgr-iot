@@ -90,6 +90,20 @@
                 </div>
             </div>
 
+            <div class="card compact">
+                <div class="card-label">Zużycie gazu</div>
+                <div class="card-value">
+                    <span id="gas-volume">--</span><span class="unit">m³</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Przepływ gazu</div>
+                <div class="card-value">
+                    <span id="gas-flow-rate">--</span><span class="unit">m³/h</span>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-label">Piec gazowy</div>
                 <div id="boiler-state" class="badge">--</div>
@@ -132,6 +146,14 @@
             </button>
         </div>
 
+        <div class="panel">
+            <h2>Licznik gazu</h2>
+            <div class="row">
+                <span class="card-label">Stan baterii</span>
+                <span id="gas-battery" class="badge">--</span>
+            </div>
+        </div>
+
         <footer>
             Ostatnia aktualizacja: <span id="last-update">--</span>
         </footer>
@@ -166,6 +188,11 @@
         <div class="panel">
             <h3>Energia</h3>
             <div class="chart-box"><canvas id="chart-energy"></canvas></div>
+        </div>
+
+        <div class="panel">
+            <h3>Zużycie gazu</h3>
+            <div class="chart-box"><canvas id="chart-gas"></canvas></div>
         </div>
     </section>
 

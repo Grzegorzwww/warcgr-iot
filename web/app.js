@@ -114,6 +114,22 @@ const TOPIC_ALIASES = {
         "wesola88/instalacja/przeplyw_gaz_stala",
         "wesola88/piec_gazowy/przeplyw_gaz_stala",
         "piec_gazowy/przeplyw_gaz_stala"
+    ],
+    gasVolume: [
+        "wesola88/zurzycie_gazu/m3",
+        "wesola88/zurzycie_gazu"
+    ],
+    gasFlowRate: [
+        "wesola88/zurzycie_gazu/m3_per_hour"
+    ],
+    gasPulses: [
+        "wesola88/zurzycie_gazu/pulses"
+    ],
+    gasBatteryV: [
+        "wesola88/zurzycie_gazu/battery_v"
+    ],
+    gasBatteryPct: [
+        "wesola88/zurzycie_gazu/battery_pct"
     ]
 };
 
@@ -164,6 +180,13 @@ function formatNumber(value) {
     const n = parseNum(value);
 
     return isNaN(n) ? "--" : n.toFixed(1);
+}
+
+
+function formatNumberPrecise(value, digits = 3) {
+    const n = parseNum(value);
+
+    return isNaN(n) ? "--" : n.toFixed(digits);
 }
 
 
@@ -969,6 +992,17 @@ async function loadStatus() {
     setText("thermal-power", formatNumber(resolveValueByAlias("thermalPower")));
     setText("energy", formatNumber(resolveValueByAlias("energy")));
     setText("heat-rate", formatNumber(resolveValueByAlias("heatRate")));
+    setText("gas-volume", formatNumberPrecise(resolveValueByAlias("gasVolume"), 3));
+    setText("gas-flow-rate", formatNumber(resolveValueByAlias("gasFlowRate")));
+
+    const gasBatteryPct = resolveValueByAlias("gasBatteryPct");
+    const gasBatteryV = resolveValueByAlias("gasBatteryV");
+    setText(
+        "gas-battery",
+        gasBatteryPct !== undefined
+            ? `${formatNumber(gasBatteryPct)} %`
+            : (gasBatteryV !== undefined ? `${formatNumber(gasBatteryV)} V` : "--")
+    );
 
     setBadge("boiler-state", resolveValueByAlias("boilerState"));
     setBadge("grate-state", resolveValueByAlias("grateState"));
@@ -1087,6 +1121,10 @@ function initCharts() {
     charts.energy = makeChart("chart-energy", [
         makeDataset("Energia", "#22c55e", { fill: true })
     ], "kWh");
+
+    charts.gas = makeChart("chart-gas", [
+        makeDataset("Zużycie gazu", "#eab308", { fill: true })
+    ], "m³");
 }
 
 
@@ -1128,13 +1166,14 @@ async function loadCharts() {
     }
 
     try {
-        const [ambient, setpoint, water, returnTemp, humidity, energy] = await Promise.all([
+        const [ambient, setpoint, water, returnTemp, humidity, energy, gasVolume] = await Promise.all([
             fetchHistory(TOPICS.ambientTemp),
             fetchHistory(TOPICS.setpoint),
             fetchHistory(TOPICS.waterTemp),
             fetchHistory(TOPICS.returnTemp),
             fetchHistory(TOPICS.humidity),
-            fetchHistory(TOPICS.energy)
+            fetchHistory(TOPICS.energy),
+            fetchHistory(TOPICS.gasVolume)
         ]);
 
         const now = Date.now();
@@ -1149,6 +1188,7 @@ async function loadCharts() {
         setChartData(charts.water, [water, returnTemp], min, now);
         setChartData(charts.humidity, [humidity], min, now);
         setChartData(charts.energy, [energy], min, now);
+        setChartData(charts.gas, [gasVolume], min, now);
 
     } catch (error) {
         console.error("Błąd pobierania historii:", error);

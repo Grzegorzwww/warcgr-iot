@@ -206,6 +206,24 @@ SETTINGS = {
         "default": 10,
         "group": "advanced",
     },
+    "zurzycie_gazu_m3": {
+        "label": "Stan licznika gazu",
+        "description": "Kalibracja stanu licznika gazu w m³ (np. po wymianie licznika). "
+                       "Urządzenie potwierdza nową wartość na wesola88/zurzycie_gazu.",
+        "unit": "m³",
+        "min": 0,
+        "max": 999999,
+        "step": 0.001,
+        "default": 0,
+        "group": "advanced",
+    },
+}
+
+
+# Klucze, dla których komenda idzie na stały, jawny topic zamiast
+# `<prefix>/<klucz>/set` (np. urządzenia spoza głównego kontraktu piec/ruszt).
+EXPLICIT_COMMAND_TOPICS = {
+    "zurzycie_gazu_m3": "wesola88/zurzycie_gazu/set",
 }
 
 
@@ -322,6 +340,9 @@ def check_token(token: str):
 
 
 def build_command_topic(key: str) -> str:
+    if key in EXPLICIT_COMMAND_TOPICS:
+        return EXPLICIT_COMMAND_TOPICS[key]
+
     gas_prefixes = [
         "wesola88/piec_gazowy",
         "wesola88/instalacja",
@@ -404,7 +425,11 @@ async def set_value(
                        f"{spec['min']}–{spec['max']} {spec['unit']}"
             )
 
-        payload = f"{value:g}"
+        if request.key == "zurzycie_gazu_m3":
+            # :g gubiłby precyzję (np. 1234.567 -> 1234.57), licznik potrzebuje pełnych m³
+            payload = f"{value:.3f}"
+        else:
+            payload = f"{value:g}"
 
     else:
         raise HTTPException(status_code=400, detail="Nieznany parametr")

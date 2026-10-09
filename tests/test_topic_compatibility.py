@@ -17,6 +17,10 @@ class TopicCompatibilityTests(unittest.TestCase):
             build_command_topic("ruszta_tryb"),
             "wesola88/piec_weglowy/ruszta_tryb/set",
         )
+        self.assertEqual(
+            build_command_topic("zurzycie_gazu_m3"),
+            "wesola88/zurzycie_gazu/set",
+        )
 
     def test_mqtt_subscriptions_cover_new_and_legacy_prefixes(self):
         from app.mqtt import MQTT_TOPICS
