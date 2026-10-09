@@ -136,6 +136,7 @@ let currentTab = "pulpit";
 const pending = {};     // klucz -> termin (ms) oczekiwania na potwierdzenie
 const charts = {};
 const steppers = {};
+const GRATE_KEYS = ["ruszta_tryb", "ruszta_czas", "ruszta_okres", "ruszta_trwanie"];
 
 
 /* ---------- Pomocnicze ---------- */
@@ -513,9 +514,7 @@ function buildGrateSettings() {
 
     list.replaceChildren();
 
-    const keys = ["ruszta_tryb", "ruszta_czas", "ruszta_okres", "ruszta_trwanie"];
-
-    for (const key of keys) {
+    for (const key of GRATE_KEYS) {
         const schema = config.settings[key];
         if (!schema) {
             continue;
@@ -555,6 +554,10 @@ function buildSettings() {
             continue;
         }
 
+        if (GRATE_KEYS.includes(key)) {
+            continue;
+        }
+
         const row = document.createElement("div");
         row.className = "setting";
 
@@ -584,7 +587,12 @@ function buildSettings() {
 
 function advancedKeys() {
     return Object.keys(config.settings)
-        .filter(key => config.settings[key].group !== "main");
+        .filter(key => config.settings[key].group !== "main" && !GRATE_KEYS.includes(key));
+}
+
+
+function grateKeys() {
+    return GRATE_KEYS.filter(key => config.settings[key]);
 }
 
 
@@ -624,6 +632,12 @@ function updateControls() {
 
     $("settings-save").disabled = Boolean(reason)
         || !advancedKeys().some(key => steppers[key]?.dirty);
+
+    const grateSave = $("grate-save");
+    if (grateSave) {
+        grateSave.disabled = Boolean(reason)
+            || !grateKeys().some(key => steppers[key]?.dirty);
+    }
 }
 
 
@@ -811,6 +825,46 @@ async function saveSettings() {
 
     if (sent > 0) {
         toast(`Wysłano ustawienia (${sent})`);
+    }
+
+    updateControls();
+}
+
+
+async function saveGrateSettings() {
+    const keys = grateKeys().filter(key => steppers[key]?.dirty);
+    const values = {};
+
+    for (const key of keys) {
+        const value = readStepper(key);
+
+        if (value === null) {
+            return;
+        }
+
+        values[key] = value;
+    }
+
+    const button = $("grate-save");
+    if (button) {
+        button.disabled = true;
+    }
+
+    let sent = 0;
+
+    for (const key of keys) {
+        steppers[key].setDirty(false);
+
+        if (!await sendSetting(key, values[key])) {
+            steppers[key].setDirty(true);
+            break;
+        }
+
+        sent++;
+    }
+
+    if (sent > 0) {
+        toast(`Wysłano ustawienia rusztów (${sent})`);
     }
 
     updateControls();
@@ -1149,6 +1203,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     $("setpoint-apply").addEventListener("click", applySetpoint);
     $("settings-save").addEventListener("click", saveSettings);
+    $("grate-save")?.addEventListener("click", saveGrateSettings);
     $("access-locked").addEventListener("submit", unlock);
     $("logout-btn").addEventListener("click", lock);
 
