@@ -1,8 +1,9 @@
-const DEFAULT_DEVICE = "wesola88/instalacja";
+const DEFAULT_DEVICE = "wesola88/piec_gazowy";
 const DEVICE_ALIASES = [
     DEFAULT_DEVICE,
-    "wesola88/piec_gazowy",
+    "wesola88/instalacja",
     "piec_gazowy",
+    "wesola88/piec_weglowy",
     "piec_weglowy"
 ];
 let DEVICE = DEFAULT_DEVICE;
@@ -44,9 +45,30 @@ const TOPIC_ALIASES = {
         "piec_gazowy/status_esp32"
     ],
     grateState: [
+        "wesola88/piec_weglowy/ruszta",
         "piec_weglowy/ruszta",
         "wesola88/piec_gazowy/ruszta",
         "wesola88/instalacja/ruszta"
+    ],
+    grateMode: [
+        "wesola88/piec_weglowy/ruszta_tryb",
+        "piec_weglowy/ruszta_tryb",
+        "wesola88/instalacja/ruszta_tryb"
+    ],
+    grateTime: [
+        "wesola88/piec_weglowy/ruszta_czas",
+        "piec_weglowy/ruszta_czas",
+        "wesola88/instalacja/ruszta_czas"
+    ],
+    gratePeriod: [
+        "wesola88/piec_weglowy/ruszta_okres",
+        "piec_weglowy/ruszta_okres",
+        "wesola88/instalacja/ruszta_okres"
+    ],
+    grateDuration: [
+        "wesola88/piec_weglowy/ruszta_trwanie",
+        "piec_weglowy/ruszta_trwanie",
+        "wesola88/instalacja/ruszta_trwanie"
     ],
     diffTemp: [
         "wesola88/instalacja/roznica_temperatur",
@@ -214,7 +236,7 @@ function normalize(key, value) {
         return undefined;
     }
 
-    if (key === "tryb" || key === "przeplyw") {
+    if (key === "tryb" || key === "przeplyw" || key === "ruszta_tryb") {
         return String(value).trim().toUpperCase();
     }
 
@@ -235,7 +257,7 @@ function keyStatus(key) {
     const have = normalize(key, resolveDeviceValue(key));
 
     const same = want !== undefined && have !== undefined && (
-        key === "tryb" || key === "przeplyw"
+        key === "tryb" || key === "przeplyw" || key === "ruszta_tryb"
             ? want === have
             : Math.abs(want - have) < 1e-3
     );
@@ -483,6 +505,45 @@ function syncStepper(key) {
 }
 
 
+function buildGrateSettings() {
+    const list = $("grate-settings");
+    if (!list) {
+        return;
+    }
+
+    list.replaceChildren();
+
+    const keys = ["ruszta_tryb", "ruszta_czas", "ruszta_okres", "ruszta_trwanie"];
+
+    for (const key of keys) {
+        const schema = config.settings[key];
+        if (!schema) {
+            continue;
+        }
+
+        const row = document.createElement("div");
+        row.className = "setting compact";
+
+        const head = document.createElement("div");
+        head.className = "setting-head";
+
+        const label = document.createElement("label");
+        label.htmlFor = "input-" + key;
+        label.textContent = schema.label;
+
+        const current = document.createElement("span");
+        current.className = "status-line";
+        current.dataset.current = key;
+
+        head.append(label, current);
+        row.append(head);
+
+        const control = schema.options ? createSelectControl(key, schema) : createStepper(key, schema);
+        row.append(control);
+        list.append(row);
+    }
+}
+
 function buildSettings() {
     const list = $("settings-list");
     list.replaceChildren();
@@ -604,7 +665,23 @@ function syncMode() {
 function renderControls() {
     syncMode();
     Object.keys(steppers).forEach(syncStepper);
+    renderGrateControls();
     updateControls();
+}
+
+function renderGrateControls() {
+    const modeInfo = keyStatus("ruszta_tryb");
+    const mode = (modeInfo.value ?? "OFF").toString().toUpperCase();
+
+    const wrap = $("grate-settings");
+    if (!wrap) {
+        return;
+    }
+
+    const label = wrap.querySelector("[data-current='ruszta_tryb']");
+    if (label) {
+        renderStatusLine(label, modeInfo, v => v);
+    }
 }
 
 
@@ -1054,6 +1131,7 @@ async function loadConfig() {
     }
 
     buildSettings();
+    buildGrateSettings();
     renderAccess();
 }
 

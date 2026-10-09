@@ -7,11 +7,15 @@ class TopicCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(
             build_command_topic("tryb"),
-            "wesola88/instalacja/tryb/set",
+            "wesola88/piec_gazowy/tryb/set",
         )
         self.assertEqual(
             build_command_topic("przeplyw"),
-            "wesola88/instalacja/przeplyw/set",
+            "wesola88/piec_gazowy/przeplyw/set",
+        )
+        self.assertEqual(
+            build_command_topic("ruszta_tryb"),
+            "wesola88/piec_weglowy/ruszta_tryb/set",
         )
 
     def test_mqtt_subscriptions_cover_new_and_legacy_prefixes(self):

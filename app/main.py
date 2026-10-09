@@ -30,13 +30,14 @@ load_dotenv()
 # Sterowanie jest wyłączone, dopóki nie ustawisz CONTROL_TOKEN w .env
 CONTROL_TOKEN = os.getenv("CONTROL_TOKEN")
 
-DEVICE = os.getenv("MQTT_DEVICE", "wesola88/instalacja")
+DEVICE = os.getenv("MQTT_DEVICE", "wesola88/piec_gazowy")
 DEVICE_ALIASES = [
     device for device in [
         DEVICE,
         "wesola88/piec_gazowy",
         "wesola88/instalacja",
         "piec_gazowy",
+        "wesola88/piec_weglowy",
         "piec_weglowy",
     ] if device
 ]
@@ -167,6 +168,44 @@ SETTINGS = {
         "default": 50,
         "group": "advanced",
     },
+    "ruszta_tryb": {
+        "label": "Tryb rusztów",
+        "description": "OFF = wyłączone, MANUAL = impuls ręczny, AUTO = cykl automatyczny.",
+        "unit": "",
+        "options": ["OFF", "MANUAL", "AUTO"],
+        "default": "OFF",
+        "group": "advanced",
+    },
+    "ruszta_czas": {
+        "label": "Czas rusztów",
+        "description": "Czas impulsu rusztów w sekundach (tryb MANUAL).",
+        "unit": "s",
+        "min": 1,
+        "max": 1800,
+        "step": 1,
+        "default": 30,
+        "group": "advanced",
+    },
+    "ruszta_okres": {
+        "label": "Okres cyklu rusztów",
+        "description": "Interwał między cyklami rusztów w sekundach.",
+        "unit": "s",
+        "min": 60,
+        "max": 86400,
+        "step": 60,
+        "default": 1200,
+        "group": "advanced",
+    },
+    "ruszta_trwanie": {
+        "label": "Czas trwania cyklu",
+        "description": "Długość ruchu rusztów w jednym cyklu w sekundach.",
+        "unit": "s",
+        "min": 1,
+        "max": 120,
+        "step": 1,
+        "default": 10,
+        "group": "advanced",
+    },
 }
 
 
@@ -283,17 +322,23 @@ def check_token(token: str):
 
 
 def build_command_topic(key: str) -> str:
-    priority_prefixes = [
-        "wesola88/instalacja",
+    gas_prefixes = [
         "wesola88/piec_gazowy",
+        "wesola88/instalacja",
         "piec_gazowy",
+    ]
+    grate_prefixes = [
+        "wesola88/piec_weglowy",
         "piec_weglowy",
+        "wesola88/instalacja",
     ]
 
     if key in {"przeplyw", "przeplyw_bieg1", "przeplyw_bieg2", "przeplyw_bieg3", "przeplyw_gaz_stala", "energia"}:
-        candidate_prefixes = priority_prefixes
+        candidate_prefixes = gas_prefixes
+    elif key in {"ruszta_tryb", "ruszta_czas", "ruszta_okres", "ruszta_trwanie", "ruszta"}:
+        candidate_prefixes = grate_prefixes
     else:
-        candidate_prefixes = [DEVICE, *priority_prefixes]
+        candidate_prefixes = [DEVICE, *gas_prefixes]
 
     for prefix in candidate_prefixes:
         if prefix:
@@ -332,7 +377,7 @@ async def set_value(
 
         payload = request.value
 
-    elif request.key == "przeplyw":
+    elif request.key in {"przeplyw", "ruszta_tryb"}:
         spec = SETTINGS[request.key]
         value = str(request.value).strip().upper()
 
