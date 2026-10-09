@@ -30,10 +30,11 @@ load_dotenv()
 # Sterowanie jest wyłączone, dopóki nie ustawisz CONTROL_TOKEN w .env
 CONTROL_TOKEN = os.getenv("CONTROL_TOKEN")
 
-DEVICE = os.getenv("MQTT_DEVICE", "wesola88/piec_gazowy")
+DEVICE = os.getenv("MQTT_DEVICE", "wesola88/instalacja")
 DEVICE_ALIASES = [
     device for device in [
         DEVICE,
+        "wesola88/piec_gazowy",
         "wesola88/instalacja",
         "piec_gazowy",
         "piec_weglowy",
@@ -98,10 +99,67 @@ SETTINGS = {
         "default": 80,
         "group": "advanced",
     },
+    "przeplyw": {
+        "label": "Profil przepływu",
+        "description": "Wybór profilu pracy pompy: GAZ, BIEG1, BIEG2, BIEG3.",
+        "unit": "",
+        "options": ["GAZ", "BIEG1", "BIEG2", "BIEG3"],
+        "default": "GAZ",
+        "group": "advanced",
+    },
+    "przeplyw_bieg1": {
+        "label": "Przepływ bieg 1",
+        "description": "Natężenie przepływu dla biegu 1.",
+        "unit": "l/min",
+        "min": 1,
+        "max": 100,
+        "step": 1,
+        "default": 25,
+        "group": "advanced",
+    },
+    "przeplyw_bieg2": {
+        "label": "Przepływ bieg 2",
+        "description": "Natężenie przepływu dla biegu 2.",
+        "unit": "l/min",
+        "min": 1,
+        "max": 100,
+        "step": 1,
+        "default": 50,
+        "group": "advanced",
+    },
+    "przeplyw_bieg3": {
+        "label": "Przepływ bieg 3",
+        "description": "Natężenie przepływu dla biegu 3.",
+        "unit": "l/min",
+        "min": 1,
+        "max": 100,
+        "step": 1,
+        "default": 75,
+        "group": "advanced",
+    },
+    "przeplyw_gaz_stala": {
+        "label": "Stała gaz",
+        "description": "Stała używana przy profilu GAZ. Domyślnie 260.",
+        "unit": "l·K/min",
+        "min": 50,
+        "max": 1000,
+        "step": 10,
+        "default": 260,
+        "group": "advanced",
+    },
+    "energia": {
+        "label": "Licznik energii",
+        "description": "Zawartość licznika energii w kWh. Wartość 0 resetuje licznik.",
+        "unit": "kWh",
+        "min": 0,
+        "max": 999999,
+        "step": 1,
+        "default": 0,
+        "group": "advanced",
+    },
     "predkosc_przeplywu": {
-        "label": "Prędkość przepływu",
-        "description": "Prędkość pracy pompy obiegowej. Wyższa wartość "
-                       "zwiększa przepływ wody przez piec.",
+        "label": "Stara wartość prędkości przepływu",
+        "description": "Kompatybilność wsteczna dla starszych buildów; nie jest głównym profilem pracy.",
         "unit": "%",
         "min": 0,
         "max": 100,
@@ -225,9 +283,21 @@ def check_token(token: str):
 
 
 def build_command_topic(key: str) -> str:
-    for device in DEVICE_ALIASES:
-        if device:
-            return f"{device}/{key}/set"
+    priority_prefixes = [
+        "wesola88/instalacja",
+        "wesola88/piec_gazowy",
+        "piec_gazowy",
+        "piec_weglowy",
+    ]
+
+    if key in {"przeplyw", "przeplyw_bieg1", "przeplyw_bieg2", "przeplyw_bieg3", "przeplyw_gaz_stala", "energia"}:
+        candidate_prefixes = priority_prefixes
+    else:
+        candidate_prefixes = [DEVICE, *priority_prefixes]
+
+    for prefix in candidate_prefixes:
+        if prefix:
+            return f"{prefix}/{key}/set"
 
     return f"{DEVICE}/{key}/set"
 
@@ -261,6 +331,18 @@ async def set_value(
             raise HTTPException(status_code=400, detail="Nieznany tryb")
 
         payload = request.value
+
+    elif request.key == "przeplyw":
+        spec = SETTINGS[request.key]
+        value = str(request.value).strip().upper()
+
+        if value not in spec.get("options", []):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{spec['label']}: dozwolone wartości {spec['options']}"
+            )
+
+        payload = value
 
     elif request.key in SETTINGS:
         spec = SETTINGS[request.key]

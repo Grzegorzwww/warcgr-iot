@@ -1,7 +1,7 @@
-const DEFAULT_DEVICE = "wesola88/piec_gazowy";
+const DEFAULT_DEVICE = "wesola88/instalacja";
 const DEVICE_ALIASES = [
     DEFAULT_DEVICE,
-    "wesola88/instalacja",
+    "wesola88/piec_gazowy",
     "piec_gazowy",
     "piec_weglowy"
 ];
@@ -67,6 +67,31 @@ const TOPIC_ALIASES = {
         "wesola88/instalacja/tempo_nagrzewania",
         "wesola88/piec_gazowy/tempo_nagrzewania",
         "piec_gazowy/tempo_nagrzewania"
+    ],
+    flowProfile: [
+        "wesola88/instalacja/przeplyw",
+        "wesola88/piec_gazowy/przeplyw",
+        "piec_gazowy/przeplyw"
+    ],
+    flowBieg1: [
+        "wesola88/instalacja/przeplyw_bieg1",
+        "wesola88/piec_gazowy/przeplyw_bieg1",
+        "piec_gazowy/przeplyw_bieg1"
+    ],
+    flowBieg2: [
+        "wesola88/instalacja/przeplyw_bieg2",
+        "wesola88/piec_gazowy/przeplyw_bieg2",
+        "piec_gazowy/przeplyw_bieg2"
+    ],
+    flowBieg3: [
+        "wesola88/instalacja/przeplyw_bieg3",
+        "wesola88/piec_gazowy/przeplyw_bieg3",
+        "piec_gazowy/przeplyw_bieg3"
+    ],
+    flowGasConstant: [
+        "wesola88/instalacja/przeplyw_gaz_stala",
+        "wesola88/piec_gazowy/przeplyw_gaz_stala",
+        "piec_gazowy/przeplyw_gaz_stala"
     ]
 };
 
@@ -189,7 +214,7 @@ function normalize(key, value) {
         return undefined;
     }
 
-    if (key === "tryb") {
+    if (key === "tryb" || key === "przeplyw") {
         return String(value).trim().toUpperCase();
     }
 
@@ -210,7 +235,9 @@ function keyStatus(key) {
     const have = normalize(key, resolveDeviceValue(key));
 
     const same = want !== undefined && have !== undefined && (
-        key === "tryb" ? want === have : Math.abs(want - have) < 1e-3
+        key === "tryb" || key === "przeplyw"
+            ? want === have
+            : Math.abs(want - have) < 1e-3
     );
 
     if (same || (pending[key] && Date.now() > pending[key])) {
@@ -281,6 +308,44 @@ function showTab() {
 
 
 /* ---------- Stepper  [−] wartość [+] ---------- */
+
+function createSelectControl(key, schema) {
+    const wrap = document.createElement("div");
+    wrap.className = "select-control";
+
+    const select = document.createElement("select");
+    select.id = "input-" + key;
+    select.className = "text-input needs-control select-input";
+    select.setAttribute("aria-label", schema.label);
+
+    for (const option of schema.options) {
+        const opt = document.createElement("option");
+        opt.value = option;
+        opt.textContent = option;
+        select.append(opt);
+    }
+
+    const current = schema.default ?? schema.options[0];
+    select.value = current;
+
+    const stepper = {
+        key,
+        schema,
+        input: select,
+        dirty: false,
+        setDirty(value) {
+            this.dirty = value;
+            wrap.classList.toggle("dirty", value);
+            updateControls();
+        }
+    };
+
+    select.addEventListener("change", () => stepper.setDirty(true));
+    steppers[key] = stepper;
+
+    wrap.append(select);
+    return wrap;
+}
 
 function createStepper(key, schema) {
     const wrap = document.createElement("div");
@@ -374,6 +439,11 @@ function createStepper(key, schema) {
 
 function readStepper(key) {
     const { input, schema } = steppers[key];
+
+    if (schema.options) {
+        return input.value;
+    }
+
     const v = parseNum(input.value);
 
     if (isNaN(v) || v < schema.min || v > schema.max) {
@@ -389,13 +459,23 @@ function readStepper(key) {
 function syncStepper(key) {
     const s = steppers[key];
     const info = keyStatus(key);
-    const format = v => `${s.fmt(v)} ${s.schema.unit}`;
+    const format = v => {
+        if (s.schema.options) {
+            return String(v ?? "");
+        }
+        return `${s.fmt(v)} ${s.schema.unit}`;
+    };
 
     document.querySelectorAll(`[data-current="${key}"]`).forEach(el => {
         renderStatusLine(el, info, format);
     });
 
     if (s.dirty || document.activeElement === s.input) {
+        return;
+    }
+
+    if (s.schema.options) {
+        s.input.value = info.value === undefined ? s.schema.default : String(info.value);
         return;
     }
 
@@ -434,7 +514,8 @@ function buildSettings() {
         desc.className = "setting-desc";
         desc.textContent = schema.description || "";
 
-        row.append(head, desc, createStepper(key, schema));
+        const control = schema.options ? createSelectControl(key, schema) : createStepper(key, schema);
+        row.append(head, desc, control);
         list.append(row);
     }
 }
@@ -871,6 +952,10 @@ function initCharts() {
     charts.humidity = makeChart("chart-humidity", [
         makeDataset("Wilgotność", "#a78bfa", { fill: true })
     ], "%");
+
+    charts.energy = makeChart("chart-energy", [
+        makeDataset("Energia", "#22c55e", { fill: true })
+    ], "kWh");
 }
 
 
@@ -912,12 +997,13 @@ async function loadCharts() {
     }
 
     try {
-        const [ambient, setpoint, water, returnTemp, humidity] = await Promise.all([
+        const [ambient, setpoint, water, returnTemp, humidity, energy] = await Promise.all([
             fetchHistory(TOPICS.ambientTemp),
             fetchHistory(TOPICS.setpoint),
             fetchHistory(TOPICS.waterTemp),
             fetchHistory(TOPICS.returnTemp),
-            fetchHistory(TOPICS.humidity)
+            fetchHistory(TOPICS.humidity),
+            fetchHistory(TOPICS.energy)
         ]);
 
         const now = Date.now();
@@ -931,6 +1017,7 @@ async function loadCharts() {
         setChartData(charts.ambient, [ambient, setpoint], min, now);
         setChartData(charts.water, [water, returnTemp], min, now);
         setChartData(charts.humidity, [humidity], min, now);
+        setChartData(charts.energy, [energy], min, now);
 
     } catch (error) {
         console.error("Błąd pobierania historii:", error);
