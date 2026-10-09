@@ -1,14 +1,78 @@
-const DEVICE = "piec_gazowy";
+const DEFAULT_DEVICE = "wesola88/piec_gazowy";
+const DEVICE_ALIASES = [
+    DEFAULT_DEVICE,
+    "wesola88/instalacja",
+    "piec_gazowy",
+    "piec_weglowy"
+];
+let DEVICE = DEFAULT_DEVICE;
 
-const TOPICS = {
-    waterTemp: "piec_gazowy/temperatura_wody",
-    ambientTemp: "piec_gazowy/temperatura_otoczenia",
-    humidity: "piec_gazowy/wilgotnosc",
-    boilerState: "piec_gazowy/stan",
-    setpoint: "piec_gazowy/temperatura_zadana",
-    espStatus: "piec_gazowy/status_esp32",
-    grateState: "piec_weglowy/ruszta"
+const TOPIC_ALIASES = {
+    waterTemp: [
+        "wesola88/piec_gazowy/temperatura_wody",
+        "wesola88/instalacja/temperatura_wody",
+        "piec_gazowy/temperatura_wody"
+    ],
+    returnTemp: [
+        "wesola88/piec_gazowy/temperatura_powrotu",
+        "wesola88/instalacja/temperatura_powrotu",
+        "piec_gazowy/temperatura_powrotu"
+    ],
+    ambientTemp: [
+        "wesola88/piec_gazowy/temperatura_otoczenia",
+        "wesola88/instalacja/temperatura_otoczenia",
+        "piec_gazowy/temperatura_otoczenia"
+    ],
+    humidity: [
+        "wesola88/piec_gazowy/wilgotnosc",
+        "wesola88/instalacja/wilgotnosc",
+        "piec_gazowy/wilgotnosc"
+    ],
+    boilerState: [
+        "wesola88/piec_gazowy/stan",
+        "wesola88/instalacja/stan",
+        "piec_gazowy/stan"
+    ],
+    setpoint: [
+        "wesola88/piec_gazowy/temperatura_zadana",
+        "wesola88/instalacja/temperatura_zadana",
+        "piec_gazowy/temperatura_zadana"
+    ],
+    espStatus: [
+        "wesola88/piec_gazowy/status_esp32",
+        "wesola88/instalacja/status_esp32",
+        "piec_gazowy/status_esp32"
+    ],
+    grateState: [
+        "piec_weglowy/ruszta",
+        "wesola88/piec_gazowy/ruszta",
+        "wesola88/instalacja/ruszta"
+    ],
+    diffTemp: [
+        "wesola88/instalacja/roznica_temperatur",
+        "wesola88/piec_gazowy/roznica_temperatur",
+        "piec_gazowy/roznica_temperatur"
+    ],
+    thermalPower: [
+        "wesola88/instalacja/moc_cieplna",
+        "wesola88/piec_gazowy/moc_cieplna",
+        "piec_gazowy/moc_cieplna"
+    ],
+    energy: [
+        "wesola88/instalacja/energia",
+        "wesola88/piec_gazowy/energia",
+        "piec_gazowy/energia"
+    ],
+    heatRate: [
+        "wesola88/instalacja/tempo_nagrzewania",
+        "wesola88/piec_gazowy/tempo_nagrzewania",
+        "piec_gazowy/tempo_nagrzewania"
+    ]
 };
+
+const TOPICS = Object.fromEntries(
+    Object.entries(TOPIC_ALIASES).map(([key, aliases]) => [key, aliases[0]])
+);
 
 const TABS = ["pulpit", "wykresy", "ustawienia"];
 const TOKEN_KEY = "control_token";
@@ -90,8 +154,31 @@ function getToken() {
 }
 
 
+function resolveValueByAlias(key) {
+    const aliases = TOPIC_ALIASES[key] ?? [];
+
+    for (const topic of aliases) {
+        if (lastState[topic] !== undefined) {
+            return lastState[topic];
+        }
+    }
+
+    return undefined;
+}
+
+function resolveDeviceValue(key) {
+    for (const prefix of DEVICE_ALIASES) {
+        const topic = `${prefix}/${key}`;
+        if (lastState[topic] !== undefined) {
+            return lastState[topic];
+        }
+    }
+
+    return undefined;
+}
+
 function isEspOnline() {
-    return String(lastState[TOPICS.espStatus] ?? "").trim().toLowerCase() === "online";
+    return String(resolveValueByAlias("espStatus") ?? "").trim().toLowerCase() === "online";
 }
 
 
@@ -120,7 +207,7 @@ function normalize(key, value) {
 //   none        – brak danych
 function keyStatus(key) {
     const want = normalize(key, desired[key]?.value);
-    const have = normalize(key, lastState[`${DEVICE}/${key}`]);
+    const have = normalize(key, resolveDeviceValue(key));
 
     const same = want !== undefined && have !== undefined && (
         key === "tryb" ? want === have : Math.abs(want - have) < 1e-3
@@ -662,12 +749,17 @@ async function loadStatus() {
         console.error("Błąd pobierania ustawień:", error);
     }
 
-    setText("water-temp", formatNumber(lastState[TOPICS.waterTemp]));
-    setText("ambient-temp", formatNumber(lastState[TOPICS.ambientTemp]));
-    setText("humidity", formatNumber(lastState[TOPICS.humidity]));
+    setText("water-temp", formatNumber(resolveValueByAlias("waterTemp")));
+    setText("return-temp", formatNumber(resolveValueByAlias("returnTemp")));
+    setText("ambient-temp", formatNumber(resolveValueByAlias("ambientTemp")));
+    setText("humidity", formatNumber(resolveValueByAlias("humidity")));
+    setText("delta-temp", formatNumber(resolveValueByAlias("diffTemp")));
+    setText("thermal-power", formatNumber(resolveValueByAlias("thermalPower")));
+    setText("energy", formatNumber(resolveValueByAlias("energy")));
+    setText("heat-rate", formatNumber(resolveValueByAlias("heatRate")));
 
-    setBadge("boiler-state", lastState[TOPICS.boilerState]);
-    setBadge("grate-state", lastState[TOPICS.grateState]);
+    setBadge("boiler-state", resolveValueByAlias("boilerState"));
+    setBadge("grate-state", resolveValueByAlias("grateState"));
 
     updateEspStatus();
     renderControls();
@@ -772,7 +864,8 @@ function initCharts() {
     ], "°C");
 
     charts.water = makeChart("chart-water", [
-        makeDataset("Woda", "#f97316", { fill: true })
+        makeDataset("Zasilanie", "#f97316", { fill: true }),
+        makeDataset("Powrót", "#fb7185")
     ], "°C");
 
     charts.humidity = makeChart("chart-humidity", [
@@ -819,10 +912,11 @@ async function loadCharts() {
     }
 
     try {
-        const [ambient, setpoint, water, humidity] = await Promise.all([
+        const [ambient, setpoint, water, returnTemp, humidity] = await Promise.all([
             fetchHistory(TOPICS.ambientTemp),
             fetchHistory(TOPICS.setpoint),
             fetchHistory(TOPICS.waterTemp),
+            fetchHistory(TOPICS.returnTemp),
             fetchHistory(TOPICS.humidity)
         ]);
 
@@ -835,7 +929,7 @@ async function loadCharts() {
         }
 
         setChartData(charts.ambient, [ambient, setpoint], min, now);
-        setChartData(charts.water, [water], min, now);
+        setChartData(charts.water, [water, returnTemp], min, now);
         setChartData(charts.humidity, [humidity], min, now);
 
     } catch (error) {
@@ -862,6 +956,12 @@ function initRangeButtons() {
 async function loadConfig() {
     try {
         config = await fetchJson("/api/config");
+        if (config.device) {
+            DEVICE = config.device;
+            if (!DEVICE_ALIASES.includes(DEVICE)) {
+                DEVICE_ALIASES.unshift(DEVICE);
+            }
+        }
     } catch (error) {
         console.error("Błąd pobierania konfiguracji:", error);
     }

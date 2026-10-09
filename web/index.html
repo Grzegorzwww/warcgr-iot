@@ -49,9 +49,44 @@
             </div>
 
             <div class="card">
+                <div class="card-label">Temp. powrotu</div>
+                <div class="card-value">
+                    <span id="return-temp">--</span><span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card">
                 <div class="card-label">Wilgotność</div>
                 <div class="card-value">
                     <span id="humidity">--</span><span class="unit">%</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Różnica temp.</div>
+                <div class="card-value">
+                    <span id="delta-temp">--</span><span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Moc cieplna</div>
+                <div class="card-value">
+                    <span id="thermal-power">--</span><span class="unit">kW</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Energia</div>
+                <div class="card-value">
+                    <span id="energy">--</span><span class="unit">kWh</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Tempo nagrzewania</div>
+                <div class="card-value">
+                    <span id="heat-rate">--</span><span class="unit">°C/h</span>
                 </div>
             </div>
 
@@ -114,7 +149,7 @@
         </div>
 
         <div class="panel">
-            <h3>Temperatura wody</h3>
+            <h3>Temperatura wody (zasilanie / powrót)</h3>
             <div class="chart-box"><canvas id="chart-water"></canvas></div>
         </div>
 

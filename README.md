@@ -63,6 +63,7 @@ Całość wygląda obecnie tak:
 ESP32 jest urządzeniem wykonawczym/sensorowym.
 Publikuje przez MQTT między innymi:
 piec_gazowy/temperatura_wody
+piec_gazowy/temperatura_powrotu
 piec_gazowy/temperatura_otoczenia
 piec_gazowy/wilgotnosc
 piec_gazowy/stan
@@ -72,10 +73,11 @@ piec_gazowy/status_esp32
 piec_weglowy/ruszta
 
 Czyli przykładowo:
-piec_gazowy/temperatura_wody → 21.31
-piec_gazowy/wilgotnosc      → 64.82
-piec_gazowy/stan            → OFF
-piec_gazowy/status_esp32    → online
+piec_gazowy/temperatura_wody    → 21.31
+piec_gazowy/temperatura_powrotu → 18.94
+piec_gazowy/wilgotnosc          → 64.82
+piec_gazowy/stan                → OFF
+piec_gazowy/status_esp32        → online
 
 ESP32 odpowiada również za lokalną logikę sterowania. To ważne, bo serwer/internet nie powinien być elementem wymaganym do bezpiecznego działania kotła.
 2. MQTT / Mosquitto
@@ -98,6 +100,10 @@ dla sterowania (kontrakt, który musi obsłużyć ESP32):
 | piec_gazowy/min_czas_pracy/set            | piec_gazowy/min_czas_pracy                | 0–60 min        |
 | piec_gazowy/min_czas_postoju/set          | piec_gazowy/min_czas_postoju              | 0–60 min        |
 | piec_gazowy/max_temperatura_wody/set      | piec_gazowy/max_temperatura_wody          | 40–90 °C        |
+| piec_gazowy/predkosc_przeplywu/set        | piec_gazowy/predkosc_przeplywu            | 0–100 %         |
+
+`piec_gazowy/temperatura_powrotu` to czysty odczyt czujnika (bez `/set`) – ESP32
+publikuje go tak samo jak `temperatura_wody` / `temperatura_otoczenia`.
 
 ESP32 po odebraniu `…/set` zapisuje wartość (np. w NVS) i publikuje ją na topicu bez `/set`.
 Panel pokazuje „oczekuje na ESP32…”, dopóki nie przyjdzie potwierdzenie.

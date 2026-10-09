@@ -17,8 +17,10 @@ MQTT_USER = os.getenv("MQTT_USER")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
 
 
-# Topics, które chcemy odbierać
+# Topics, które chcemy odbierać. Obsługujemy zarówno nową strukturę
+# `wesola88/...`, jak i poprzednie `piec_gazowy/...` / `piec_weglowy/...`.
 MQTT_TOPICS = [
+    ("wesola88/#", 0),
     ("piec_gazowy/#", 0),
     ("piec_weglowy/#", 0),
 ]

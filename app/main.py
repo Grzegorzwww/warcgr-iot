@@ -30,7 +30,15 @@ load_dotenv()
 # Sterowanie jest wyłączone, dopóki nie ustawisz CONTROL_TOKEN w .env
 CONTROL_TOKEN = os.getenv("CONTROL_TOKEN")
 
-DEVICE = "piec_gazowy"
+DEVICE = os.getenv("MQTT_DEVICE", "wesola88/piec_gazowy")
+DEVICE_ALIASES = [
+    device for device in [
+        DEVICE,
+        "wesola88/instalacja",
+        "piec_gazowy",
+        "piec_weglowy",
+    ] if device
+]
 
 MODES = ["ON", "OFF", "AUTO"]
 
@@ -88,6 +96,17 @@ SETTINGS = {
         "max": 90,
         "step": 1,
         "default": 80,
+        "group": "advanced",
+    },
+    "predkosc_przeplywu": {
+        "label": "Prędkość przepływu",
+        "description": "Prędkość pracy pompy obiegowej. Wyższa wartość "
+                       "zwiększa przepływ wody przez piec.",
+        "unit": "%",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "default": 50,
         "group": "advanced",
     },
 }
@@ -205,6 +224,14 @@ def check_token(token: str):
         raise HTTPException(status_code=401, detail="Nieprawidłowy token")
 
 
+def build_command_topic(key: str) -> str:
+    for device in DEVICE_ALIASES:
+        if device:
+            return f"{device}/{key}/set"
+
+    return f"{DEVICE}/{key}/set"
+
+
 @app.get("/api/config")
 async def config():
     return {
@@ -255,7 +282,9 @@ async def set_value(
     else:
         raise HTTPException(status_code=400, detail="Nieznany parametr")
 
-    if not publish_command(f"{DEVICE}/{request.key}/set", payload):
+    topic = build_command_topic(request.key)
+
+    if not publish_command(topic, payload):
         raise HTTPException(status_code=503, detail="Brak połączenia z MQTT")
 
     await save_setting(request.key, payload)
