@@ -217,6 +217,17 @@ SETTINGS = {
         "default": 0,
         "group": "advanced",
     },
+    "cena_gazu": {
+        "label": "Cena za 1 m³ gazu",
+        "description": "Używana przez licznik do wyliczania kosztu zużycia. "
+                       "Puste pole = urządzenie nie publikuje kosztu (cost_last_24h).",
+        "unit": "zł",
+        "min": 0,
+        "max": 50,
+        "step": 0.01,
+        "optional": True,
+        "group": "advanced",
+    },
 }
 
 
@@ -224,6 +235,7 @@ SETTINGS = {
 # `<prefix>/<klucz>/set` (np. urządzenia spoza głównego kontraktu piec/ruszt).
 EXPLICIT_COMMAND_TOPICS = {
     "zurzycie_gazu_m3": "wesola88/zurzycie_gazu/set",
+    "cena_gazu": "wesola88/zurzycie_gazu/cena/set",
 }
 
 
@@ -409,6 +421,27 @@ async def set_value(
             )
 
         payload = value
+
+    elif request.key == "cena_gazu":
+        spec = SETTINGS[request.key]
+        raw = str(request.value).strip()
+
+        if raw == "":
+            payload = ""
+        else:
+            try:
+                value = float(raw.replace(",", "."))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Cena musi być liczbą")
+
+            if not math.isfinite(value) or not spec["min"] <= value <= spec["max"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{spec['label']}: dozwolony zakres "
+                           f"{spec['min']}–{spec['max']} {spec['unit']}"
+                )
+
+            payload = f"{value:.2f}"
 
     elif request.key in SETTINGS:
         spec = SETTINGS[request.key]

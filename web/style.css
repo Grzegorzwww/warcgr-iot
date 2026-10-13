@@ -513,7 +513,7 @@ button:disabled {
     bottom: 0;
     z-index: 10;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
     padding-bottom: env(safe-area-inset-bottom);
     background: var(--surface);
@@ -525,11 +525,12 @@ button:disabled {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 2px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 600;
     text-decoration: none;
+    padding: 0 2px;
 }
 
 .tabbar a.active {
@@ -537,14 +538,15 @@ button:disabled {
 }
 
 .tabbar svg {
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     fill: none;
     stroke: currentColor;
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
 }
+
 
 /* ---------- Inne ---------- */
 

@@ -130,6 +130,21 @@ const TOPIC_ALIASES = {
     ],
     gasBatteryPct: [
         "wesola88/zurzycie_gazu/battery_pct"
+    ],
+    gasLast1h: [
+        "wesola88/zurzycie_gazu/m3_last_1h"
+    ],
+    gasLast3h: [
+        "wesola88/zurzycie_gazu/m3_last_3h"
+    ],
+    gasLast24h: [
+        "wesola88/zurzycie_gazu/m3_last_24h"
+    ],
+    gasCostLast24h: [
+        "wesola88/zurzycie_gazu/cost_last_24h"
+    ],
+    gasHistoryHours: [
+        "wesola88/zurzycie_gazu/history_hours"
     ]
 };
 
@@ -137,7 +152,7 @@ const TOPICS = Object.fromEntries(
     Object.entries(TOPIC_ALIASES).map(([key, aliases]) => [key, aliases[0]])
 );
 
-const TABS = ["pulpit", "wykresy", "ustawienia"];
+const TABS = ["pulpit", "gaz", "prad", "wykresy", "ustawienia"];
 const TOKEN_KEY = "control_token";
 const STATUS_INTERVAL_MS = 5000;
 const CHART_INTERVAL_MS = 60000;
@@ -153,6 +168,14 @@ const pending = {};     // klucz -> termin (ms) oczekiwania na potwierdzenie
 const charts = {};
 const steppers = {};
 const GRATE_KEYS = ["ruszta_tryb", "ruszta_czas", "ruszta_okres", "ruszta_trwanie"];
+const GAS_KEYS = ["zurzycie_gazu_m3", "cena_gazu"];
+
+// Klucze ustawień, których aktualna wartość z ESP32 nie jest publikowana pod
+// `<prefix DEVICE_ALIASES>/<klucz>`, tylko na własnym, jawnym topicu urządzenia.
+const KEY_TOPIC_OVERRIDES = {
+    zurzycie_gazu_m3: "wesola88/zurzycie_gazu/m3",
+    cena_gazu: "wesola88/zurzycie_gazu/cena"
+};
 
 
 /* ---------- Pomocnicze ---------- */
@@ -238,6 +261,12 @@ function resolveValueByAlias(key) {
 }
 
 function resolveDeviceValue(key) {
+    const override = KEY_TOPIC_OVERRIDES[key];
+
+    if (override && lastState[override] !== undefined) {
+        return lastState[override];
+    }
+
     for (const prefix of DEVICE_ALIASES) {
         const topic = `${prefix}/${key}`;
         if (lastState[topic] !== undefined) {
@@ -346,7 +375,7 @@ function showTab() {
 
     window.scrollTo(0, 0);
 
-    if (currentTab === "wykresy") {
+    if (currentTab === "wykresy" || currentTab === "gaz") {
         Object.values(charts).forEach(chart => chart.resize());
         loadCharts();
     }
@@ -466,6 +495,10 @@ function createStepper(key, schema) {
     input.addEventListener("blur", () => {
         const v = parseNum(input.value);
 
+        if (schema.optional && input.value.trim() === "") {
+            return;
+        }
+
         if (!isNaN(v)) {
             input.value = fmt(clamp(v));
         }
@@ -488,6 +521,10 @@ function readStepper(key) {
 
     if (schema.options) {
         return input.value;
+    }
+
+    if (schema.optional && input.value.trim() === "") {
+        return "";
     }
 
     const v = parseNum(input.value);
@@ -566,6 +603,45 @@ function buildGrateSettings() {
     }
 }
 
+function buildGasSettings() {
+    const list = $("gas-settings");
+    if (!list) {
+        return;
+    }
+
+    list.replaceChildren();
+
+    for (const key of GAS_KEYS) {
+        const schema = config.settings[key];
+        if (!schema) {
+            continue;
+        }
+
+        const row = document.createElement("div");
+        row.className = "setting compact";
+
+        const head = document.createElement("div");
+        head.className = "setting-head";
+
+        const label = document.createElement("label");
+        label.htmlFor = "input-" + key;
+        label.textContent = schema.label;
+
+        const current = document.createElement("span");
+        current.className = "status-line";
+        current.dataset.current = key;
+
+        head.append(label, current);
+
+        const desc = document.createElement("p");
+        desc.className = "setting-desc";
+        desc.textContent = schema.description || "";
+
+        row.append(head, desc, createStepper(key, schema));
+        list.append(row);
+    }
+}
+
 function buildSettings() {
     const list = $("settings-list");
     list.replaceChildren();
@@ -577,7 +653,7 @@ function buildSettings() {
             continue;
         }
 
-        if (GRATE_KEYS.includes(key)) {
+        if (GRATE_KEYS.includes(key) || GAS_KEYS.includes(key)) {
             continue;
         }
 
@@ -610,12 +686,19 @@ function buildSettings() {
 
 function advancedKeys() {
     return Object.keys(config.settings)
-        .filter(key => config.settings[key].group !== "main" && !GRATE_KEYS.includes(key));
+        .filter(key => config.settings[key].group !== "main"
+            && !GRATE_KEYS.includes(key)
+            && !GAS_KEYS.includes(key));
 }
 
 
 function grateKeys() {
     return GRATE_KEYS.filter(key => config.settings[key]);
+}
+
+
+function gasKeys() {
+    return GAS_KEYS.filter(key => config.settings[key]);
 }
 
 
@@ -660,6 +743,12 @@ function updateControls() {
     if (grateSave) {
         grateSave.disabled = Boolean(reason)
             || !grateKeys().some(key => steppers[key]?.dirty);
+    }
+
+    const gasSave = $("gas-save");
+    if (gasSave) {
+        gasSave.disabled = Boolean(reason)
+            || !gasKeys().some(key => steppers[key]?.dirty);
     }
 }
 
@@ -894,6 +983,46 @@ async function saveGrateSettings() {
 }
 
 
+async function saveGasSettings() {
+    const keys = gasKeys().filter(key => steppers[key]?.dirty);
+    const values = {};
+
+    for (const key of keys) {
+        const value = readStepper(key);
+
+        if (value === null) {
+            return;
+        }
+
+        values[key] = value;
+    }
+
+    const button = $("gas-save");
+    if (button) {
+        button.disabled = true;
+    }
+
+    let sent = 0;
+
+    for (const key of keys) {
+        steppers[key].setDirty(false);
+
+        if (!await sendSetting(key, values[key])) {
+            steppers[key].setDirty(true);
+            break;
+        }
+
+        sent++;
+    }
+
+    if (sent > 0) {
+        toast(`Wysłano ustawienia gazu (${sent})`);
+    }
+
+    updateControls();
+}
+
+
 /* ---------- Dostęp (token) ---------- */
 
 async function unlock(event) {
@@ -994,6 +1123,11 @@ async function loadStatus() {
     setText("heat-rate", formatNumber(resolveValueByAlias("heatRate")));
     setText("gas-volume", formatNumberPrecise(resolveValueByAlias("gasVolume"), 3));
     setText("gas-flow-rate", formatNumber(resolveValueByAlias("gasFlowRate")));
+    setText("gas-last-1h", formatNumberPrecise(resolveValueByAlias("gasLast1h"), 3));
+    setText("gas-last-3h", formatNumberPrecise(resolveValueByAlias("gasLast3h"), 3));
+    setText("gas-last-24h", formatNumberPrecise(resolveValueByAlias("gasLast24h"), 3));
+    setText("gas-cost-24h", formatNumber(resolveValueByAlias("gasCostLast24h")));
+    setText("gas-history-hours", formatNumber(resolveValueByAlias("gasHistoryHours")));
 
     const gasBatteryPct = resolveValueByAlias("gasBatteryPct");
     const gasBatteryV = resolveValueByAlias("gasBatteryV");
@@ -1226,6 +1360,7 @@ async function loadConfig() {
 
     buildSettings();
     buildGrateSettings();
+    buildGasSettings();
     renderAccess();
 }
 
@@ -1244,20 +1379,21 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("setpoint-apply").addEventListener("click", applySetpoint);
     $("settings-save").addEventListener("click", saveSettings);
     $("grate-save")?.addEventListener("click", saveGrateSettings);
+    $("gas-save")?.addEventListener("click", saveGasSettings);
     $("access-locked").addEventListener("submit", unlock);
     $("logout-btn").addEventListener("click", lock);
 
     await loadConfig();
     await loadStatus();
 
-    if (currentTab === "wykresy") {
+    if (currentTab === "wykresy" || currentTab === "gaz") {
         loadCharts();
     }
 
     setInterval(loadStatus, STATUS_INTERVAL_MS);
 
     setInterval(() => {
-        if (currentTab === "wykresy" && !document.hidden) {
+        if ((currentTab === "wykresy" || currentTab === "gaz") && !document.hidden) {
             loadCharts();
         }
     }, CHART_INTERVAL_MS);
