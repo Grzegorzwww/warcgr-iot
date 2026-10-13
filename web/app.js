@@ -145,6 +145,36 @@ const TOPIC_ALIASES = {
     ],
     gasHistoryHours: [
         "wesola88/zurzycie_gazu/history_hours"
+    ],
+    elecKwh: [
+        "wesola88/zurzycie_pradu/kwh"
+    ],
+    elecPowerW: [
+        "wesola88/zurzycie_pradu/power_w"
+    ],
+    elecLast1h: [
+        "wesola88/zurzycie_pradu/kwh_last_1h"
+    ],
+    elecLast3h: [
+        "wesola88/zurzycie_pradu/kwh_last_3h"
+    ],
+    elecLast24h: [
+        "wesola88/zurzycie_pradu/kwh_last_24h"
+    ],
+    elecCostLast24h: [
+        "wesola88/zurzycie_pradu/cost_last_24h"
+    ],
+    elecPulses: [
+        "wesola88/zurzycie_pradu/pulses"
+    ],
+    elecHistoryHours: [
+        "wesola88/zurzycie_pradu/history_hours"
+    ],
+    elecPulseWidthMs: [
+        "wesola88/zurzycie_pradu/pulse_width_ms"
+    ],
+    elecRejectedFlashes: [
+        "wesola88/zurzycie_pradu/rejected_flashes"
     ]
 };
 
@@ -169,12 +199,15 @@ const charts = {};
 const steppers = {};
 const GRATE_KEYS = ["ruszta_tryb", "ruszta_czas", "ruszta_okres", "ruszta_trwanie"];
 const GAS_KEYS = ["zurzycie_gazu_m3", "cena_gazu"];
+const ELEC_KEYS = ["zurzycie_pradu_kwh", "cena_pradu"];
 
 // Klucze ustawień, których aktualna wartość z ESP32 nie jest publikowana pod
 // `<prefix DEVICE_ALIASES>/<klucz>`, tylko na własnym, jawnym topicu urządzenia.
 const KEY_TOPIC_OVERRIDES = {
     zurzycie_gazu_m3: "wesola88/zurzycie_gazu/m3",
-    cena_gazu: "wesola88/zurzycie_gazu/cena"
+    cena_gazu: "wesola88/zurzycie_gazu/cena",
+    zurzycie_pradu_kwh: "wesola88/zurzycie_pradu/kwh",
+    cena_pradu: "wesola88/zurzycie_pradu/cena"
 };
 
 
@@ -187,6 +220,15 @@ function $(id) {
 
 function setText(id, value) {
     $(id).textContent = value;
+}
+
+
+function setVisible(id, visible) {
+    const el = $(id);
+
+    if (el) {
+        el.hidden = !visible;
+    }
 }
 
 
@@ -210,6 +252,13 @@ function formatNumberPrecise(value, digits = 3) {
     const n = parseNum(value);
 
     return isNaN(n) ? "--" : n.toFixed(digits);
+}
+
+
+function formatWithUnit(value, unit) {
+    const text = formatNumber(value);
+
+    return text === "--" ? text : `${text} ${unit}`;
 }
 
 
@@ -375,7 +424,7 @@ function showTab() {
 
     window.scrollTo(0, 0);
 
-    if (currentTab === "wykresy" || currentTab === "gaz") {
+    if (currentTab === "wykresy" || currentTab === "gaz" || currentTab === "prad") {
         Object.values(charts).forEach(chart => chart.resize());
         loadCharts();
     }
@@ -642,6 +691,45 @@ function buildGasSettings() {
     }
 }
 
+function buildElecSettings() {
+    const list = $("elec-settings");
+    if (!list) {
+        return;
+    }
+
+    list.replaceChildren();
+
+    for (const key of ELEC_KEYS) {
+        const schema = config.settings[key];
+        if (!schema) {
+            continue;
+        }
+
+        const row = document.createElement("div");
+        row.className = "setting compact";
+
+        const head = document.createElement("div");
+        head.className = "setting-head";
+
+        const label = document.createElement("label");
+        label.htmlFor = "input-" + key;
+        label.textContent = schema.label;
+
+        const current = document.createElement("span");
+        current.className = "status-line";
+        current.dataset.current = key;
+
+        head.append(label, current);
+
+        const desc = document.createElement("p");
+        desc.className = "setting-desc";
+        desc.textContent = schema.description || "";
+
+        row.append(head, desc, createStepper(key, schema));
+        list.append(row);
+    }
+}
+
 function buildSettings() {
     const list = $("settings-list");
     list.replaceChildren();
@@ -653,7 +741,7 @@ function buildSettings() {
             continue;
         }
 
-        if (GRATE_KEYS.includes(key) || GAS_KEYS.includes(key)) {
+        if (GRATE_KEYS.includes(key) || GAS_KEYS.includes(key) || ELEC_KEYS.includes(key)) {
             continue;
         }
 
@@ -688,7 +776,8 @@ function advancedKeys() {
     return Object.keys(config.settings)
         .filter(key => config.settings[key].group !== "main"
             && !GRATE_KEYS.includes(key)
-            && !GAS_KEYS.includes(key));
+            && !GAS_KEYS.includes(key)
+            && !ELEC_KEYS.includes(key));
 }
 
 
@@ -699,6 +788,11 @@ function grateKeys() {
 
 function gasKeys() {
     return GAS_KEYS.filter(key => config.settings[key]);
+}
+
+
+function elecKeys() {
+    return ELEC_KEYS.filter(key => config.settings[key]);
 }
 
 
@@ -749,6 +843,12 @@ function updateControls() {
     if (gasSave) {
         gasSave.disabled = Boolean(reason)
             || !gasKeys().some(key => steppers[key]?.dirty);
+    }
+
+    const elecSave = $("elec-save");
+    if (elecSave) {
+        elecSave.disabled = Boolean(reason)
+            || !elecKeys().some(key => steppers[key]?.dirty);
     }
 }
 
@@ -1023,6 +1123,46 @@ async function saveGasSettings() {
 }
 
 
+async function saveElecSettings() {
+    const keys = elecKeys().filter(key => steppers[key]?.dirty);
+    const values = {};
+
+    for (const key of keys) {
+        const value = readStepper(key);
+
+        if (value === null) {
+            return;
+        }
+
+        values[key] = value;
+    }
+
+    const button = $("elec-save");
+    if (button) {
+        button.disabled = true;
+    }
+
+    let sent = 0;
+
+    for (const key of keys) {
+        steppers[key].setDirty(false);
+
+        if (!await sendSetting(key, values[key])) {
+            steppers[key].setDirty(true);
+            break;
+        }
+
+        sent++;
+    }
+
+    if (sent > 0) {
+        toast(`Wysłano ustawienia prądu (${sent})`);
+    }
+
+    updateControls();
+}
+
+
 /* ---------- Dostęp (token) ---------- */
 
 async function unlock(event) {
@@ -1137,6 +1277,29 @@ async function loadStatus() {
             ? `${formatNumber(gasBatteryPct)} %`
             : (gasBatteryV !== undefined ? `${formatNumber(gasBatteryV)} V` : "--")
     );
+
+    setText("elec-kwh", formatNumberPrecise(resolveValueByAlias("elecKwh"), 3));
+    setText("elec-power-w", formatNumber(resolveValueByAlias("elecPowerW")));
+    setText("elec-last-1h", formatNumberPrecise(resolveValueByAlias("elecLast1h"), 3));
+    setText("elec-last-3h", formatNumberPrecise(resolveValueByAlias("elecLast3h"), 3));
+    setText("elec-last-24h", formatNumberPrecise(resolveValueByAlias("elecLast24h"), 3));
+
+    const elecCost = resolveValueByAlias("elecCostLast24h");
+    setVisible("elec-cost-24h-card", elecCost !== undefined);
+    setText("elec-cost-24h", formatNumber(elecCost));
+
+    const elecPulses = resolveValueByAlias("elecPulses");
+    setVisible("elec-pulses-row", elecPulses !== undefined);
+    setText("elec-pulses", formatNumber(elecPulses));
+
+    setText("elec-pulse-width", formatWithUnit(resolveValueByAlias("elecPulseWidthMs"), "ms"));
+    setText("elec-rejected-flashes", formatNumber(resolveValueByAlias("elecRejectedFlashes")));
+
+    const elecHistoryHoursRaw = resolveValueByAlias("elecHistoryHours");
+    setText("elec-history-hours", formatWithUnit(elecHistoryHoursRaw, "h"));
+
+    const elecHistoryHours = parseNum(elecHistoryHoursRaw);
+    setVisible("elec-history-warning", !isNaN(elecHistoryHours) && elecHistoryHours < 24);
 
     setBadge("boiler-state", resolveValueByAlias("boilerState"));
     setBadge("grate-state", resolveValueByAlias("grateState"));
@@ -1259,6 +1422,14 @@ function initCharts() {
     charts.gas = makeChart("chart-gas", [
         makeDataset("Zużycie gazu", "#eab308", { fill: true })
     ], "m³");
+
+    charts.elecKwh = makeChart("chart-elec-kwh", [
+        makeDataset("Stan licznika", "#38bdf8", { fill: true })
+    ], "kWh");
+
+    charts.elecPower = makeChart("chart-elec-power", [
+        makeDataset("Moc chwilowa", "#f97316", { fill: true })
+    ], "W");
 }
 
 
@@ -1300,14 +1471,16 @@ async function loadCharts() {
     }
 
     try {
-        const [ambient, setpoint, water, returnTemp, humidity, energy, gasVolume] = await Promise.all([
+        const [ambient, setpoint, water, returnTemp, humidity, energy, gasVolume, elecKwh, elecPowerW] = await Promise.all([
             fetchHistory(TOPICS.ambientTemp),
             fetchHistory(TOPICS.setpoint),
             fetchHistory(TOPICS.waterTemp),
             fetchHistory(TOPICS.returnTemp),
             fetchHistory(TOPICS.humidity),
             fetchHistory(TOPICS.energy),
-            fetchHistory(TOPICS.gasVolume)
+            fetchHistory(TOPICS.gasVolume),
+            fetchHistory(TOPICS.elecKwh),
+            fetchHistory(TOPICS.elecPowerW)
         ]);
 
         const now = Date.now();
@@ -1323,6 +1496,8 @@ async function loadCharts() {
         setChartData(charts.humidity, [humidity], min, now);
         setChartData(charts.energy, [energy], min, now);
         setChartData(charts.gas, [gasVolume], min, now);
+        setChartData(charts.elecKwh, [elecKwh], min, now);
+        setChartData(charts.elecPower, [elecPowerW], min, now);
 
     } catch (error) {
         console.error("Błąd pobierania historii:", error);
@@ -1361,6 +1536,7 @@ async function loadConfig() {
     buildSettings();
     buildGrateSettings();
     buildGasSettings();
+    buildElecSettings();
     renderAccess();
 }
 
@@ -1380,20 +1556,21 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("settings-save").addEventListener("click", saveSettings);
     $("grate-save")?.addEventListener("click", saveGrateSettings);
     $("gas-save")?.addEventListener("click", saveGasSettings);
+    $("elec-save")?.addEventListener("click", saveElecSettings);
     $("access-locked").addEventListener("submit", unlock);
     $("logout-btn").addEventListener("click", lock);
 
     await loadConfig();
     await loadStatus();
 
-    if (currentTab === "wykresy" || currentTab === "gaz") {
+    if (currentTab === "wykresy" || currentTab === "gaz" || currentTab === "prad") {
         loadCharts();
     }
 
     setInterval(loadStatus, STATUS_INTERVAL_MS);
 
     setInterval(() => {
-        if ((currentTab === "wykresy" || currentTab === "gaz") && !document.hidden) {
+        if ((currentTab === "wykresy" || currentTab === "gaz" || currentTab === "prad") && !document.hidden) {
             loadCharts();
         }
     }, CHART_INTERVAL_MS);

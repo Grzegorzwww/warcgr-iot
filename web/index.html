@@ -215,12 +215,96 @@
     <!-- ===== PRĄD ===== -->
     <section class="tab" data-tab="prad" hidden>
 
+        <div class="cards">
+            <div class="card compact">
+                <div class="card-label">Stan licznika</div>
+                <div class="card-value">
+                    <span id="elec-kwh">--</span><span class="unit">kWh</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Moc chwilowa</div>
+                <div class="card-value">
+                    <span id="elec-power-w">--</span><span class="unit">W</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Zużycie – 1h</div>
+                <div class="card-value">
+                    <span id="elec-last-1h">--</span><span class="unit">kWh</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Zużycie – 3h</div>
+                <div class="card-value">
+                    <span id="elec-last-3h">--</span><span class="unit">kWh</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Zużycie – 24h</div>
+                <div class="card-value">
+                    <span id="elec-last-24h">--</span><span class="unit">kWh</span>
+                </div>
+            </div>
+
+            <div class="card compact" id="elec-cost-24h-card" hidden>
+                <div class="card-label">Koszt – 24h</div>
+                <div class="card-value">
+                    <span id="elec-cost-24h">--</span><span class="unit">zł</span>
+                </div>
+            </div>
+        </div>
+
         <div class="panel">
-            <h2>Prąd</h2>
-            <p class="muted">
-                Licznik zużycia energii elektrycznej nie jest jeszcze podłączony.
-                Ta zakładka zostanie uzupełniona o dane, gdy pojawi się urządzenie pomiarowe.
+            <h2>Diagnostyka licznika prądu</h2>
+
+            <p class="note" id="elec-history-warning" hidden>
+                Okno historii jest krótsze niż 24h – wartości zużycia/kosztu są zaniżone.
             </p>
+
+            <div class="row">
+                <span class="card-label">Okno historii</span>
+                <span id="elec-history-hours" class="badge">--</span>
+            </div>
+
+            <div class="row" id="elec-pulses-row" hidden>
+                <span class="card-label">Impulsy</span>
+                <span id="elec-pulses" class="badge">--</span>
+            </div>
+
+            <div class="row">
+                <span class="card-label">Szerokość impulsu</span>
+                <span id="elec-pulse-width" class="badge">--</span>
+            </div>
+
+            <div class="row">
+                <span class="card-label">Odrzucone błyski</span>
+                <span id="elec-rejected-flashes" class="badge">--</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>Stan licznika</h3>
+            <div class="chart-box"><canvas id="chart-elec-kwh"></canvas></div>
+        </div>
+
+        <div class="panel">
+            <h3>Moc chwilowa</h3>
+            <div class="chart-box"><canvas id="chart-elec-power"></canvas></div>
+        </div>
+
+        <div class="panel">
+            <h2>Ustawienia licznika prądu</h2>
+
+            <div id="elec-settings"></div>
+
+            <button type="button" id="elec-save" class="btn btn-primary needs-control" disabled>
+                Zapisz ustawienia prądu
+            </button>
         </div>
     </section>
 

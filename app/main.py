@@ -228,6 +228,28 @@ SETTINGS = {
         "optional": True,
         "group": "advanced",
     },
+    "zurzycie_pradu_kwh": {
+        "label": "Stan licznika prądu",
+        "description": "Kalibracja stanu licznika energii elektrycznej w kWh (np. po wymianie licznika). "
+                       "Urządzenie potwierdza nową wartość na wesola88/zurzycie_pradu/kwh.",
+        "unit": "kWh",
+        "min": 0,
+        "max": 999999,
+        "step": 0.001,
+        "default": 0,
+        "group": "advanced",
+    },
+    "cena_pradu": {
+        "label": "Cena za 1 kWh prądu",
+        "description": "Używana przez licznik do wyliczania kosztu zużycia. "
+                       "Puste pole = urządzenie nie publikuje kosztu (cost_last_24h).",
+        "unit": "zł",
+        "min": 0,
+        "max": 10,
+        "step": 0.01,
+        "optional": True,
+        "group": "advanced",
+    },
 }
 
 
@@ -236,6 +258,8 @@ SETTINGS = {
 EXPLICIT_COMMAND_TOPICS = {
     "zurzycie_gazu_m3": "wesola88/zurzycie_gazu/set",
     "cena_gazu": "wesola88/zurzycie_gazu/cena/set",
+    "zurzycie_pradu_kwh": "wesola88/zurzycie_pradu/set",
+    "cena_pradu": "wesola88/zurzycie_pradu/cena/set",
 }
 
 
@@ -422,7 +446,7 @@ async def set_value(
 
         payload = value
 
-    elif request.key == "cena_gazu":
+    elif request.key in {"cena_gazu", "cena_pradu"}:
         spec = SETTINGS[request.key]
         raw = str(request.value).strip()
 
