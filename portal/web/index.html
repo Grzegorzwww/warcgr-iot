@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0f172a">
+
+    <title>Warcgr – Prąd</title>
+
+    <link rel="stylesheet" href="/static/style.css?v=__V__">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js" defer></script>
+    <script src="/static/app.js?v=__V__" defer></script>
+</head>
+
+<body>
+
+<header class="header">
+    <div>
+        <h1>Warcgr</h1>
+        <p>Monitoring zużycia prądu</p>
+    </div>
+
+    <div id="user-box" class="user-box" hidden>
+        <span id="user-email" class="muted"></span>
+        <button type="button" id="logout-btn" class="btn btn-secondary btn-small">Wyloguj</button>
+    </div>
+</header>
+
+<main class="container">
+
+    <!-- ===== LOGOWANIE / REJESTRACJA ===== -->
+    <section id="auth-view" hidden>
+        <div class="panel">
+            <div class="segmented" id="auth-mode">
+                <button type="button" data-mode="login" class="active">Logowanie</button>
+                <button type="button" data-mode="register">Rejestracja</button>
+            </div>
+
+            <form id="auth-form" novalidate>
+                <label class="control-label" for="auth-email">E-mail</label>
+                <input id="auth-email" class="text-input" type="email"
+                       autocomplete="username" inputmode="email" maxlength="254" required>
+
+                <label class="control-label" for="auth-password">Hasło</label>
+                <input id="auth-password" class="text-input" type="password"
+                       autocomplete="current-password" maxlength="128" required>
+
+                <p class="muted small" id="auth-hint" hidden>Hasło: minimum 8 znaków.</p>
+                <p class="error-text" id="auth-error" hidden></p>
+
+                <button type="submit" id="auth-submit" class="btn btn-primary">Zaloguj</button>
+            </form>
+        </div>
+    </section>
+
+    <!-- ===== PANEL ===== -->
+    <section id="app-view" hidden>
+
+        <div class="segmented" id="view-switch">
+            <button type="button" data-view="measure" class="active">Pomiary</button>
+            <button type="button" data-view="devices">Urządzenia</button>
+        </div>
+
+        <!-- Pomiary -->
+        <div id="measure-view">
+
+            <div id="no-devices" class="panel" hidden>
+                <h2>Brak urządzeń</h2>
+                <p class="muted">
+                    Dodaj pierwsze urządzenie w zakładce „Urządzenia”, aby zobaczyć pomiary.
+                </p>
+            </div>
+
+            <div id="measure-content" hidden>
+
+                <div class="row-between">
+                    <select id="device-select" class="text-input select-input" aria-label="Urządzenie"></select>
+                    <span id="device-status" class="badge">--</span>
+                </div>
+
+                <div class="cards">
+                    <div class="card">
+                        <div class="card-label">Moc chwilowa</div>
+                        <div class="card-value"><span id="m-power">--</span><span class="unit">W</span></div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-label">Stan licznika</div>
+                        <div class="card-value"><span id="m-kwh">--</span><span class="unit">kWh</span></div>
+                    </div>
+
+                    <div class="card compact">
+                        <div class="card-label">Zużycie – 1h</div>
+                        <div class="card-value"><span id="m-1h">--</span><span class="unit">kWh</span></div>
+                    </div>
+
+                    <div class="card compact">
+                        <div class="card-label">Zużycie – 3h</div>
+                        <div class="card-value"><span id="m-3h">--</span><span class="unit">kWh</span></div>
+                    </div>
+
+                    <div class="card compact">
+                        <div class="card-label">Zużycie – 24h</div>
+                        <div class="card-value"><span id="m-24h">--</span><span class="unit">kWh</span></div>
+                    </div>
+
+                    <div class="card compact" id="m-cost-card" hidden>
+                        <div class="card-label">Koszt – 24h</div>
+                        <div class="card-value"><span id="m-cost">--</span><span class="unit">zł</span></div>
+                    </div>
+                </div>
+
+                <p class="note" id="history-warning" hidden>
+                    Urządzenie ma historię krótszą niż 24h – wartości zużycia z okien czasowych są zaniżone.
+                </p>
+
+                <div class="segmented small" id="range-buttons">
+                    <button type="button" data-hours="6">6h</button>
+                    <button type="button" data-hours="24" class="active">24h</button>
+                    <button type="button" data-hours="72">3d</button>
+                    <button type="button" data-hours="168">7d</button>
+                </div>
+
+                <div class="panel">
+                    <h3>Moc chwilowa</h3>
+                    <div class="chart-box"><canvas id="chart-power"></canvas></div>
+                </div>
+
+                <div class="panel">
+                    <h3>Zużycie godzinowe</h3>
+                    <div class="chart-box"><canvas id="chart-hourly"></canvas></div>
+                </div>
+
+                <div class="panel">
+                    <h3>Diagnostyka czujnika</h3>
+                    <div class="row"><span class="card-label">Szerokość impulsu</span><span id="d-width" class="badge">--</span></div>
+                    <div class="row"><span class="card-label">Odrzucone błyski</span><span id="d-rejected" class="badge">--</span></div>
+                    <div class="row"><span class="card-label">Okno historii</span><span id="d-history" class="badge">--</span></div>
+                    <div class="row" id="d-pulses-row" hidden><span class="card-label">Impulsy</span><span id="d-pulses" class="badge">--</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Urządzenia -->
+        <div id="devices-view" hidden>
+
+            <div class="panel">
+                <h2>Dodaj urządzenie</h2>
+                <form id="device-form" novalidate>
+                    <label class="control-label" for="device-name">Nazwa</label>
+                    <input id="device-name" class="text-input" type="text" maxlength="40"
+                           placeholder="np. Licznik w garażu" autocomplete="off">
+                    <p class="error-text" id="device-error" hidden></p>
+                    <button type="submit" class="btn btn-primary">Dodaj</button>
+                </form>
+            </div>
+
+            <div id="device-list"></div>
+
+            <div class="panel">
+                <h3>Jak podłączyć urządzenie</h3>
+                <p class="muted small">
+                    Wpisz token urządzenia (lub zeskanuj kod QR) w konfiguracji ESP.
+                    Urządzenie ma publikować na brokerze MQTT pod topicami:
+                </p>
+                <p><code>TOKEN/zurzycie_pradu/kwh</code><br>
+                   <code>TOKEN/zurzycie_pradu/power_w</code><br>
+                   <code>TOKEN/zurzycie_pradu/kwh_last_1h</code> itd.</p>
+                <p class="muted small">Token jest tajny – kto go zna, może wysyłać dane w imieniu urządzenia.</p>
+            </div>
+        </div>
+
+    </section>
+
+    <div id="toast" class="toast" hidden></div>
+</main>
+
+</body>
+</html>

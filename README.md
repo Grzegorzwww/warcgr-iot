@@ -293,3 +293,43 @@ piec aktualnie oddaje 8.4 kW
 dzisiaj wyprodukował 42.7 kWh ciepła
 
 I właśnie dlatego obecna architektura MQTT → FastAPI → SQLite → WWW jest dobrym fundamentem — kolejne czujniki możemy po prostu dodawać jako kolejne MQTT topics, zamiast przebudowywać cały system.
+
+## Portal użytkowników (api.warcgr.pl)
+
+Osobny moduł `portal/` (własny proces i baza `data/portal.db`), niezależny od panelu `iot.warcgr.pl`.
+Każdy użytkownik rejestruje się e-mailem i hasłem, dodaje urządzenia ESP i widzi tylko monitoring zużycia prądu.
+
+Uruchomienie:
+
+```bash
+uvicorn portal.main:app --host 127.0.0.1 --port 8005
+```
+
+Cloudflare Tunnel: `api.warcgr.pl` → `http://127.0.0.1:8005`.
+
+### Token urządzenia
+
+Po dodaniu urządzenia w panelu użytkownik dostaje losowy token (192 bity, widoczny jako tekst i kod QR).
+ESP publikuje na broker pod tematami z tym tokenem:
+
+```
+<token>/zurzycie_pradu/kwh
+<token>/zurzycie_pradu/power_w
+<token>/zurzycie_pradu/kwh_last_1h | kwh_last_3h | kwh_last_24h | cost_last_24h
+<token>/zurzycie_pradu/pulses | history_hours | pulse_width_ms | rejected_flashes
+```
+
+Temat `<token>/zurzycie_pradu` bez metryki jest traktowany jak `kwh`.
+Wiadomości z nieznanym tokenem (także z tematów `wesola88/...`) portal ignoruje.
+Portal tylko czyta z MQTT i niczego nie publikuje.
+
+### Ograniczenia MVP
+
+- Brak weryfikacji e-mail i resetu hasła.
+- Wszyscy używają tych samych danych logowania do brokera, a Mosquitto nie wymusza ACL per token.
+  Sekretem jest sam token. W przyszłości można dodać ACL lub osobne dane logowania per urządzenie.
+- Limity prób logowania i rejestracji są w pamięci procesu.
+- Zapytania zmieniające dane wymagają nagłówka `X-Requested-With: warcgr-portal` (ochrona CSRF).
+- Zapisywane są tylko `kwh` i `power_w`, reszta to ostatnie wartości w pamięci.
+
+Testy: `python3 -m unittest discover -s tests`
