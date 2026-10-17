@@ -22,6 +22,7 @@ let selectedId = null;
 let rangeHours = { prad: 24, woda: 24 };
 let listSignature = "";
 let authMode = "login";
+let currentUserKey = "anonymous";
 let statusTimer = null;
 let chartTimer = null;
 let toastTimer = null;
@@ -102,6 +103,28 @@ function fmt(value, digits) {
     return value === undefined || value === null || isNaN(n) ? "--" : n.toFixed(digits);
 }
 
+function storageKey(name) {
+    return `warcgr-portal:${currentUserKey}:${name}`;
+}
+
+function readStored(name, fallback) {
+    try {
+        const value = window.localStorage.getItem(storageKey(name));
+
+        return value === null ? fallback : JSON.parse(value);
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function writeStored(name, value) {
+    try {
+        window.localStorage.setItem(storageKey(name), JSON.stringify(value));
+    } catch (error) {
+        // localStorage może być niedostępny w bardzo ograniczonych środowiskach
+    }
+}
+
 
 /* ---------- Widoki: logowanie / panel ---------- */
 
@@ -120,10 +143,15 @@ function showAuth() {
 
 
 function showApp(email) {
+    currentUserKey = String(email || "anonymous").trim().toLowerCase();
+
     $("auth-view").hidden = true;
     $("app-view").hidden = false;
     $("user-box").hidden = false;
     $("user-email").textContent = email;
+
+    rangeHours.prad = Number(readStored("range-prad", 24));
+    rangeHours.woda = Number(readStored("range-woda", 24));
 
     refreshDevices();
     clearInterval(statusTimer);
@@ -243,8 +271,12 @@ function currentDevice() {
 function renderDeviceSelect() {
     const select = $("device-select");
 
+    const storedSelected = Number(readStored("selected-device-id", 0) || 0);
+
     if (!devices.some(d => d.id === selectedId)) {
-        selectedId = devices.length ? devices[0].id : null;
+        selectedId = devices.some(d => d.id === storedSelected)
+            ? storedSelected
+            : (devices.length ? devices[0].id : null);
     }
 
     select.replaceChildren();
@@ -258,6 +290,7 @@ function renderDeviceSelect() {
 
     if (selectedId !== null) {
         select.value = String(selectedId);
+        writeStored("selected-device-id", selectedId);
         loadCharts();
     }
 }
@@ -742,6 +775,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     rangeButtons.forEach(btn => {
         btn.addEventListener("click", () => {
             rangeHours.prad = Number(btn.dataset.hours);
+            writeStored("range-prad", rangeHours.prad);
             rangeButtons.forEach(b => b.classList.toggle("active", b === btn));
             loadCharts();
         });
@@ -752,6 +786,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     rangeButtonsWoda.forEach(btn => {
         btn.addEventListener("click", () => {
             rangeHours.woda = Number(btn.dataset.hours);
+            writeStored("range-woda", rangeHours.woda);
             rangeButtonsWoda.forEach(b => b.classList.toggle("active", b === btn));
             loadCharts();
         });
@@ -759,6 +794,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     $("device-select").addEventListener("change", event => {
         selectedId = Number(event.target.value);
+        writeStored("selected-device-id", selectedId);
         renderMeasurements();
         loadCharts();
     });
