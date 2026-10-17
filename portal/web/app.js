@@ -13,9 +13,13 @@ const TILES = {
     kwh_last_24h: ["m-24h", 3]
 };
 
+const WATER_TILES = {
+    temperatura: ["m-temp", 1]
+};
+
 let devices = [];
 let selectedId = null;
-let selectedHours = 24;
+let rangeHours = { prad: 24, woda: 24 };
 let listSignature = "";
 let authMode = "login";
 let statusTimer = null;
@@ -246,7 +250,7 @@ function renderDeviceSelect() {
     select.replaceChildren();
 
     for (const device of devices) {
-        const option = el("option", "", device.name);
+        const option = el("option", "", `${device.name} — ${device.type_label}`);
 
         option.value = String(device.id);
         select.append(option);
@@ -286,11 +290,14 @@ function renderDeviceList() {
         const panel = el("div", "panel");
 
         const head = el("div", "device-head");
+        const nameBox = el("div");
         const name = el("span", "device-name", device.name);
+        const typeLabel = el("div", "muted small", device.type_label);
         const badge = el("span", "badge", "--");
 
+        nameBox.append(name, typeLabel);
         badge.dataset.onlineFor = String(device.id);
-        head.append(name, badge);
+        head.append(nameBox, badge);
 
         const token = el("code", "token-box", device.token);
 
@@ -364,6 +371,7 @@ async function addDevice(event) {
     event.preventDefault();
 
     const name = $("device-name").value.trim();
+    const deviceType = $("device-type").value;
 
     $("device-error").hidden = true;
 
@@ -376,7 +384,7 @@ async function addDevice(event) {
     try {
         const device = await api("/api/devices", {
             method: "POST",
-            body: JSON.stringify({ name })
+            body: JSON.stringify({ name, device_type: deviceType })
         });
 
         $("device-name").value = "";
@@ -410,6 +418,16 @@ async function removeDevice(device) {
 
 /* ---------- Pomiary ---------- */
 
+function syncRangeButtons(deviceType) {
+    const selector = deviceType === "woda" ? "#range-buttons-woda button" : "#range-buttons button";
+    const hours = rangeHours[deviceType];
+
+    document.querySelectorAll(selector).forEach(btn => {
+        btn.classList.toggle("active", Number(btn.dataset.hours) === hours);
+    });
+}
+
+
 function renderMeasurements() {
     const device = currentDevice();
 
@@ -420,9 +438,24 @@ function renderMeasurements() {
         return;
     }
 
+    setOnlineBadge($("device-status"), device.online);
+
+    const isWater = device.device_type === "woda";
+
+    $("measure-prad").hidden = isWater;
+    $("measure-woda").hidden = !isWater;
+
+    syncRangeButtons(device.device_type);
+
     const latest = device.latest || {};
 
-    setOnlineBadge($("device-status"), device.online);
+    if (isWater) {
+        for (const [metric, [id, digits]] of Object.entries(WATER_TILES)) {
+            $(id).textContent = fmt(latest[metric], digits);
+        }
+
+        return;
+    }
 
     for (const [metric, [id, digits]] of Object.entries(TILES)) {
         $(id).textContent = fmt(latest[metric], digits);
@@ -447,10 +480,10 @@ function renderMeasurements() {
 
 /* ---------- Wykresy ---------- */
 
-function formatTick(ms) {
+function formatTick(ms, hours) {
     const d = new Date(ms);
 
-    if (selectedHours <= 24) {
+    if (hours <= 24) {
         return d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
     }
 
@@ -533,6 +566,46 @@ function initCharts() {
             }
         }
     });
+
+    charts.temperature = new Chart($("chart-temperature"), {
+        type: "line",
+        data: {
+            datasets: [{
+                label: "Temperatura",
+                data: [],
+                borderColor: "#38bdf8",
+                backgroundColor: "#38bdf833",
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.25,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            parsing: false,
+            interaction: { mode: "nearest", axis: "x", intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: items => new Date(items[0].parsed.x).toLocaleString("pl-PL"),
+                        label: item => ` ${item.parsed.y.toFixed(1)} \u00b0C`
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: "linear",
+                    ticks: { ...ticks, maxTicksLimit: 5, maxRotation: 0, callback: v => formatTick(v, rangeHours.woda) },
+                    grid: { color: grid }
+                },
+                y: { grace: "10%", ticks, grid: { color: grid } }
+            }
+        }
+    });
 }
 
 
@@ -542,16 +615,36 @@ function setEmpty(chart, empty) {
 
 
 async function loadCharts() {
-    if (selectedId === null || !charts.power || $("measure-view").hidden) {
+    if (selectedId === null || $("measure-view").hidden) {
         return;
     }
 
-    const id = selectedId;
+    const device = currentDevice();
+
+    if (!device) {
+        return;
+    }
+
+    if (device.device_type === "woda") {
+        await loadWaterChart(device);
+    } else {
+        await loadPowerCharts(device);
+    }
+}
+
+
+async function loadPowerCharts(device) {
+    if (!charts.power) {
+        return;
+    }
+
+    const id = device.id;
+    const hours = rangeHours.prad;
 
     try {
-        const [power, hourly] = await Promise.all([
-            api(`/api/devices/${id}/history?metric=power_w&hours=${selectedHours}`),
-            api(`/api/devices/${id}/hourly?hours=${selectedHours}`)
+        const [power, hourlyData] = await Promise.all([
+            api(`/api/devices/${id}/history?metric=power_w&hours=${hours}`),
+            api(`/api/devices/${id}/hourly?hours=${hours}`)
         ]);
 
         if (id !== selectedId) {
@@ -564,14 +657,15 @@ async function loadCharts() {
             .filter(p => !isNaN(p.x));
 
         charts.power.data.datasets[0].data = points;
-        charts.power.options.scales.x.min = now - selectedHours * 3600 * 1000;
+        charts.power.options.scales.x.min = now - hours * 3600 * 1000;
         charts.power.options.scales.x.max = now;
+        charts.power.options.scales.x.ticks.callback = v => formatTick(v, hours);
         charts.power.update();
         setEmpty(charts.power, points.length === 0);
 
-        const dayLabels = selectedHours > 24;
+        const dayLabels = hours > 24;
 
-        charts.hourly.data.labels = hourly.data.map(h => {
+        charts.hourly.data.labels = hourlyData.data.map(h => {
             const d = new Date(parseTime(h.hour));
             const time = d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
 
@@ -579,15 +673,52 @@ async function loadCharts() {
                 ? `${d.toLocaleDateString("pl-PL", { day: "2-digit", month: "2-digit" })} ${time}`
                 : time;
         });
-        charts.hourly.data.datasets[0].data = hourly.data.map(h => h.kwh);
+        charts.hourly.data.datasets[0].data = hourlyData.data.map(h => h.kwh);
         charts.hourly.update();
-        setEmpty(charts.hourly, hourly.data.length === 0);
+        setEmpty(charts.hourly, hourlyData.data.length === 0);
 
     } catch (error) {
         if (error.status === 401) {
             showAuth();
         } else {
             console.error("Błąd pobierania wykresów:", error);
+        }
+    }
+}
+
+
+async function loadWaterChart(device) {
+    if (!charts.temperature) {
+        return;
+    }
+
+    const id = device.id;
+    const hours = rangeHours.woda;
+
+    try {
+        const temp = await api(`/api/devices/${id}/history?metric=temperatura&hours=${hours}`);
+
+        if (id !== selectedId) {
+            return;
+        }
+
+        const now = Date.now();
+        const points = temp.data
+            .map(p => ({ x: parseTime(p.timestamp), y: p.value }))
+            .filter(p => !isNaN(p.x));
+
+        charts.temperature.data.datasets[0].data = points;
+        charts.temperature.options.scales.x.min = now - hours * 3600 * 1000;
+        charts.temperature.options.scales.x.max = now;
+        charts.temperature.options.scales.x.ticks.callback = v => formatTick(v, hours);
+        charts.temperature.update();
+        setEmpty(charts.temperature, points.length === 0);
+
+    } catch (error) {
+        if (error.status === 401) {
+            showAuth();
+        } else {
+            console.error("Błąd pobierania wykresu temperatury:", error);
         }
     }
 }
@@ -610,8 +741,18 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     rangeButtons.forEach(btn => {
         btn.addEventListener("click", () => {
-            selectedHours = Number(btn.dataset.hours);
+            rangeHours.prad = Number(btn.dataset.hours);
             rangeButtons.forEach(b => b.classList.toggle("active", b === btn));
+            loadCharts();
+        });
+    });
+
+    const rangeButtonsWoda = document.querySelectorAll("#range-buttons-woda button");
+
+    rangeButtonsWoda.forEach(btn => {
+        btn.addEventListener("click", () => {
+            rangeHours.woda = Number(btn.dataset.hours);
+            rangeButtonsWoda.forEach(b => b.classList.toggle("active", b === btn));
             loadCharts();
         });
     });

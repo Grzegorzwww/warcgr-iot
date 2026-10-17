@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#0f172a">
 
-    <title>Warcgr – Prąd</title>
+    <title>Warcgr – Panel</title>
 
     <link rel="stylesheet" href="/static/style.css?v=__V__">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
@@ -18,7 +18,7 @@
 <header class="header">
     <div>
         <h1>Warcgr</h1>
-        <p>Monitoring zużycia prądu</p>
+        <p>Monitoring czujników domowych</p>
     </div>
 
     <div id="user-box" class="user-box" hidden>
@@ -79,65 +79,90 @@
                     <span id="device-status" class="badge">--</span>
                 </div>
 
-                <div class="cards">
-                    <div class="card">
-                        <div class="card-label">Moc chwilowa</div>
-                        <div class="card-value"><span id="m-power">--</span><span class="unit">W</span></div>
+                <!-- Zużycie prądu -->
+                <div id="measure-prad">
+                    <div class="cards">
+                        <div class="card">
+                            <div class="card-label">Moc chwilowa</div>
+                            <div class="card-value"><span id="m-power">--</span><span class="unit">W</span></div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-label">Stan licznika</div>
+                            <div class="card-value"><span id="m-kwh">--</span><span class="unit">kWh</span></div>
+                        </div>
+
+                        <div class="card compact">
+                            <div class="card-label">Zużycie – 1h</div>
+                            <div class="card-value"><span id="m-1h">--</span><span class="unit">kWh</span></div>
+                        </div>
+
+                        <div class="card compact">
+                            <div class="card-label">Zużycie – 3h</div>
+                            <div class="card-value"><span id="m-3h">--</span><span class="unit">kWh</span></div>
+                        </div>
+
+                        <div class="card compact">
+                            <div class="card-label">Zużycie – 24h</div>
+                            <div class="card-value"><span id="m-24h">--</span><span class="unit">kWh</span></div>
+                        </div>
+
+                        <div class="card compact" id="m-cost-card" hidden>
+                            <div class="card-label">Koszt – 24h</div>
+                            <div class="card-value"><span id="m-cost">--</span><span class="unit">zł</span></div>
+                        </div>
                     </div>
 
-                    <div class="card">
-                        <div class="card-label">Stan licznika</div>
-                        <div class="card-value"><span id="m-kwh">--</span><span class="unit">kWh</span></div>
+                    <p class="note" id="history-warning" hidden>
+                        Urządzenie ma historię krótszą niż 24h – wartości zużycia z okien czasowych są zaniżone.
+                    </p>
+
+                    <div class="segmented small" id="range-buttons">
+                        <button type="button" data-hours="6">6h</button>
+                        <button type="button" data-hours="24" class="active">24h</button>
+                        <button type="button" data-hours="72">3d</button>
+                        <button type="button" data-hours="168">7d</button>
                     </div>
 
-                    <div class="card compact">
-                        <div class="card-label">Zużycie – 1h</div>
-                        <div class="card-value"><span id="m-1h">--</span><span class="unit">kWh</span></div>
+                    <div class="panel">
+                        <h3>Moc chwilowa</h3>
+                        <div class="chart-box"><canvas id="chart-power"></canvas></div>
                     </div>
 
-                    <div class="card compact">
-                        <div class="card-label">Zużycie – 3h</div>
-                        <div class="card-value"><span id="m-3h">--</span><span class="unit">kWh</span></div>
+                    <div class="panel">
+                        <h3>Zużycie godzinowe</h3>
+                        <div class="chart-box"><canvas id="chart-hourly"></canvas></div>
                     </div>
 
-                    <div class="card compact">
-                        <div class="card-label">Zużycie – 24h</div>
-                        <div class="card-value"><span id="m-24h">--</span><span class="unit">kWh</span></div>
-                    </div>
-
-                    <div class="card compact" id="m-cost-card" hidden>
-                        <div class="card-label">Koszt – 24h</div>
-                        <div class="card-value"><span id="m-cost">--</span><span class="unit">zł</span></div>
+                    <div class="panel">
+                        <h3>Diagnostyka czujnika</h3>
+                        <div class="row"><span class="card-label">Szerokość impulsu</span><span id="d-width" class="badge">--</span></div>
+                        <div class="row"><span class="card-label">Odrzucone błyski</span><span id="d-rejected" class="badge">--</span></div>
+                        <div class="row"><span class="card-label">Okno historii</span><span id="d-history" class="badge">--</span></div>
+                        <div class="row" id="d-pulses-row" hidden><span class="card-label">Impulsy</span><span id="d-pulses" class="badge">--</span></div>
                     </div>
                 </div>
 
-                <p class="note" id="history-warning" hidden>
-                    Urządzenie ma historię krótszą niż 24h – wartości zużycia z okien czasowych są zaniżone.
-                </p>
+                <!-- Temperatura wody -->
+                <div id="measure-woda" hidden>
+                    <div class="cards">
+                        <div class="card">
+                            <div class="card-label">Temperatura wody</div>
+                            <div class="card-value"><span id="m-temp">--</span><span class="unit">°C</span></div>
+                        </div>
+                    </div>
 
-                <div class="segmented small" id="range-buttons">
-                    <button type="button" data-hours="6">6h</button>
-                    <button type="button" data-hours="24" class="active">24h</button>
-                    <button type="button" data-hours="72">3d</button>
-                    <button type="button" data-hours="168">7d</button>
-                </div>
+                    <div class="segmented small" id="range-buttons-woda">
+                        <button type="button" data-hours="1">1h</button>
+                        <button type="button" data-hours="3">3h</button>
+                        <button type="button" data-hours="24" class="active">24h</button>
+                        <button type="button" data-hours="72">3d</button>
+                    </div>
 
-                <div class="panel">
-                    <h3>Moc chwilowa</h3>
-                    <div class="chart-box"><canvas id="chart-power"></canvas></div>
-                </div>
-
-                <div class="panel">
-                    <h3>Zużycie godzinowe</h3>
-                    <div class="chart-box"><canvas id="chart-hourly"></canvas></div>
-                </div>
-
-                <div class="panel">
-                    <h3>Diagnostyka czujnika</h3>
-                    <div class="row"><span class="card-label">Szerokość impulsu</span><span id="d-width" class="badge">--</span></div>
-                    <div class="row"><span class="card-label">Odrzucone błyski</span><span id="d-rejected" class="badge">--</span></div>
-                    <div class="row"><span class="card-label">Okno historii</span><span id="d-history" class="badge">--</span></div>
-                    <div class="row" id="d-pulses-row" hidden><span class="card-label">Impulsy</span><span id="d-pulses" class="badge">--</span></div>
+                    <div class="panel">
+                        <h3>Temperatura wody</h3>
+                        <div class="chart-box"><canvas id="chart-temperature"></canvas></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -151,6 +176,13 @@
                     <label class="control-label" for="device-name">Nazwa</label>
                     <input id="device-name" class="text-input" type="text" maxlength="40"
                            placeholder="np. Licznik w garażu" autocomplete="off">
+
+                    <label class="control-label" for="device-type">Typ czujnika</label>
+                    <select id="device-type" class="text-input">
+                        <option value="prad">Zużycie prądu</option>
+                        <option value="woda">Temperatura wody</option>
+                    </select>
+
                     <p class="error-text" id="device-error" hidden></p>
                     <button type="submit" class="btn btn-primary">Dodaj</button>
                 </form>
@@ -162,11 +194,14 @@
                 <h3>Jak podłączyć urządzenie</h3>
                 <p class="muted small">
                     Wpisz token urządzenia (lub zeskanuj kod QR) w konfiguracji ESP.
-                    Urządzenie ma publikować na brokerze MQTT pod topicami:
+                    Urządzenie publikuje na brokerze MQTT pod topicami zależnymi od wybranego typu czujnika:
                 </p>
-                <p><code>TOKEN/zurzycie_pradu/kwh</code><br>
+                <p><strong>Zużycie prądu:</strong><br>
+                   <code>TOKEN/zurzycie_pradu/kwh</code><br>
                    <code>TOKEN/zurzycie_pradu/power_w</code><br>
                    <code>TOKEN/zurzycie_pradu/kwh_last_1h</code> itd.</p>
+                <p><strong>Temperatura wody:</strong><br>
+                   <code>TOKEN/temperatura_wody</code></p>
                 <p class="muted small">Token jest tajny – kto go zna, może wysyłać dane w imieniu urządzenia.</p>
             </div>
         </div>

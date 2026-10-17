@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from portal import db, ingest
+from portal.device_types import DEFAULT_DEVICE_TYPE, DEVICE_TYPES
 from portal.security import (
     DUMMY_HASH,
     MAX_PASSWORD_LENGTH,
@@ -36,7 +37,6 @@ COOKIE_NAME = "portal_session"
 CSRF_HEADER_VALUE = "warcgr-portal"
 
 MAX_DEVICES_PER_USER = 10
-HISTORY_METRICS = {"kwh", "power_w"}
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
@@ -171,11 +171,13 @@ async def start_session(response: Response, user_id: int):
 
 def device_view(device: dict) -> dict:
     token = device["token"]
+    type_config = DEVICE_TYPES.get(device["device_type"], {})
 
     return {
         **device,
         "online": ingest.is_online(token),
         "latest": ingest.latest.get(token, {}),
+        "type_label": type_config.get("label", device["device_type"]),
     }
 
 
@@ -260,6 +262,7 @@ async def me(user: dict = Depends(current_user)):
 
 class DeviceCreate(BaseModel):
     name: str = Field(max_length=40)
+    device_type: str = Field(default=DEFAULT_DEVICE_TYPE, max_length=20)
 
 
 @app.get("/api/devices")
@@ -276,14 +279,17 @@ async def add_device(body: DeviceCreate, user: dict = Depends(current_user)):
     if not name:
         raise HTTPException(status_code=400, detail="Podaj nazwę urządzenia")
 
+    if body.device_type not in DEVICE_TYPES:
+        raise HTTPException(status_code=400, detail="Nieznany typ czujnika")
+
     if await db.count_devices(user["id"]) >= MAX_DEVICES_PER_USER:
         raise HTTPException(
             status_code=400,
             detail=f"Maksymalna liczba urządzeń: {MAX_DEVICES_PER_USER}",
         )
 
-    device = await db.create_device(user["id"], name, new_device_token())
-    ingest.register_token(device["token"], device["id"])
+    device = await db.create_device(user["id"], name, new_device_token(), body.device_type)
+    ingest.register_token(device["token"], device["id"], device["device_type"])
 
     return device_view(device)
 
@@ -312,12 +318,15 @@ async def owned_device(device_id: int, user: dict) -> dict:
 @app.get("/api/devices/{device_id}/history")
 async def history(
     device_id: int,
-    metric: str = "power_w",
+    metric: str,
     hours: int = 24,
     max_points: int = 300,
     user: dict = Depends(current_user),
 ):
-    if metric not in HISTORY_METRICS:
+    device = await owned_device(device_id, user)
+    type_config = DEVICE_TYPES.get(device["device_type"])
+
+    if type_config is None or metric not in type_config["history_metrics"]:
         raise HTTPException(status_code=400, detail="Nieznana metryka")
 
     if hours < 1 or hours > 168:
@@ -325,8 +334,6 @@ async def history(
 
     if max_points < 10 or max_points > 2000:
         raise HTTPException(status_code=400, detail="max_points must be between 10 and 2000")
-
-    await owned_device(device_id, user)
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     data = await db.get_readings(device_id, metric, since)
@@ -340,13 +347,18 @@ async def hourly(
     hours: int = 24,
     user: dict = Depends(current_user),
 ):
+    device = await owned_device(device_id, user)
+    type_config = DEVICE_TYPES.get(device["device_type"])
+    hourly_metric = type_config.get("hourly_metric") if type_config else None
+
+    if hourly_metric is None:
+        raise HTTPException(status_code=400, detail="Niedostępne dla tego typu czujnika")
+
     if hours < 1 or hours > 168:
         raise HTTPException(status_code=400, detail="hours must be between 1 and 168")
 
-    await owned_device(device_id, user)
-
     # +2h zapasu: potrzebny ostatni odczyt sprzed pierwszej godziny okna
     since = datetime.now(timezone.utc) - timedelta(hours=hours + 2)
-    rows = await db.get_readings(device_id, "kwh", since)
+    rows = await db.get_readings(device_id, hourly_metric, since)
 
     return {"hours": hours, "data": hourly_consumption(rows, hours)}

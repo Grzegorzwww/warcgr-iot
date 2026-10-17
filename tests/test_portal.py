@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from portal import db, ingest
+from portal.device_types import DEVICE_TYPES
 from portal.security import (
     Throttle,
     hash_password,
@@ -63,27 +64,52 @@ class SecurityTests(unittest.TestCase):
 
 class IngestTests(unittest.TestCase):
     def setUp(self):
-        ingest.set_known_tokens({"tok123": 7})
+        ingest.set_known_tokens({
+            "tok123": {"device_id": 7, "device_type": "prad"},
+            "tokw1": {"device_id": 9, "device_type": "woda"},
+        })
         ingest.latest.clear()
         ingest.last_seen.clear()
 
     def test_parse_topic(self):
-        self.assertEqual(ingest.parse_topic("tok123/zurzycie_pradu"), ("tok123", "kwh"))
-        self.assertEqual(ingest.parse_topic("tok123/zurzycie_pradu/kwh"), ("tok123", "kwh"))
-        self.assertEqual(ingest.parse_topic("tok123/zurzycie_pradu/power_w"), ("tok123", "power_w"))
-        self.assertIsNone(ingest.parse_topic("tok123/zurzycie_pradu/set"))
-        self.assertIsNone(ingest.parse_topic("tok123/zurzycie_pradu/nieznana"))
-        self.assertIsNone(ingest.parse_topic("tok123/inny/kwh"))
-        self.assertIsNone(ingest.parse_topic("zurzycie_pradu"))
-        self.assertIsNone(ingest.parse_topic("/zurzycie_pradu/kwh"))
-        self.assertIsNone(ingest.parse_topic("a/b/zurzycie_pradu/kwh"))
+        self.assertEqual(ingest.parse_topic("tok123/zurzycie_pradu", "prad"), "kwh")
+        self.assertEqual(ingest.parse_topic("tok123/zurzycie_pradu/kwh", "prad"), "kwh")
+        self.assertEqual(ingest.parse_topic("tok123/zurzycie_pradu/power_w", "prad"), "power_w")
+        self.assertIsNone(ingest.parse_topic("tok123/zurzycie_pradu/set", "prad"))
+        self.assertIsNone(ingest.parse_topic("tok123/zurzycie_pradu/nieznana", "prad"))
+        self.assertIsNone(ingest.parse_topic("tok123/inny/kwh", "prad"))
+        self.assertIsNone(ingest.parse_topic("zurzycie_pradu", "prad"))
+        self.assertIsNone(ingest.parse_topic("/zurzycie_pradu/kwh", "prad"))
+        self.assertIsNone(ingest.parse_topic("a/b/zurzycie_pradu/kwh", "prad"))
+
+        # topic należący do innego typu czujnika -> ignorowany
+        self.assertIsNone(ingest.parse_topic("tokw1/zurzycie_pradu/kwh", "woda"))
+
+    def test_parse_topic_water_sensor(self):
+        self.assertEqual(ingest.parse_topic("tokw1/temperatura_wody", "woda"), "temperatura")
+        self.assertEqual(ingest.parse_topic("tokw1/temperatura_wody/temperatura", "woda"), "temperatura")
+        self.assertIsNone(ingest.parse_topic("tokw1/temperatura_wody/inna", "woda"))
+        self.assertIsNone(ingest.parse_topic("tokw1/zurzycie_pradu", "woda"))
 
     def test_known_token_updates_state(self):
         result = ingest.process_message("tok123/zurzycie_pradu/power_w", " 250.5 ")
 
-        self.assertEqual(result, (7, "power_w", 250.5))
+        self.assertEqual(result, (7, "prad", "power_w", 250.5))
         self.assertEqual(ingest.latest["tok123"]["power_w"], "250.5")
         self.assertTrue(ingest.is_online("tok123"))
+
+    def test_water_sensor_updates_state(self):
+        result = ingest.process_message("tokw1/temperatura_wody", "42.3")
+
+        self.assertEqual(result, (9, "woda", "temperatura", 42.3))
+        self.assertEqual(ingest.latest["tokw1"]["temperatura"], "42.3")
+        self.assertTrue(ingest.is_online("tokw1"))
+
+    def test_topic_mismatched_with_device_type_is_ignored(self):
+        # Token zarejestrowany jako czujnik wody, ale publikuje na topicu prądu
+        self.assertIsNone(ingest.process_message("tokw1/zurzycie_pradu/kwh", "1"))
+        # i odwrotnie
+        self.assertIsNone(ingest.process_message("tok123/temperatura_wody", "20"))
 
     def test_unknown_token_is_ignored(self):
         # W tym także własne urządzenie z iot.warcgr.pl (wesola88/zurzycie_pradu/...)
@@ -104,6 +130,11 @@ class IngestTests(unittest.TestCase):
 
         self.assertIsNone(ingest.process_message("tok123/zurzycie_pradu/kwh", "2"))
         self.assertFalse(ingest.is_online("tok123"))
+
+    def test_stored_metrics_match_declared_history_metrics(self):
+        # Spojność konfiguracji: wszystko czego używamy do wykresów musi być zapisywane
+        for config in DEVICE_TYPES.values():
+            self.assertTrue(config["history_metrics"] <= config["stored_metrics"])
 
 
 class StatsTests(unittest.TestCase):
@@ -170,7 +201,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_users_cannot_access_foreign_devices(self):
         alice = await db.create_user("alice@x.pl", "h")
         bob = await db.create_user("bob@x.pl", "h")
-        device = await db.create_device(alice, "Garaż", "tok-alice")
+        device = await db.create_device(alice, "Garaż", "tok-alice", "prad")
 
         self.assertIsNotNone(await db.get_device(alice, device["id"]))
         self.assertIsNone(await db.get_device(bob, device["id"]))
@@ -180,7 +211,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_delete_device_removes_readings(self):
         user = await db.create_user("a@b.pl", "h")
-        device = await db.create_device(user, "Licznik", "tok1")
+        device = await db.create_device(user, "Licznik", "tok1", "prad")
 
         await db.save_reading(device["id"], "kwh", 12.5)
         since = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -192,7 +223,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cleanup_removes_old_readings(self):
         user = await db.create_user("a@b.pl", "h")
-        device = await db.create_device(user, "Licznik", "tok1")
+        device = await db.create_device(user, "Licznik", "tok1", "prad")
 
         async with db._db() as conn:
             old = datetime.now(timezone.utc) - timedelta(days=30)
@@ -209,6 +240,43 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         rows = await db.get_readings(device["id"], "kwh", since)
 
         self.assertEqual([r["value"] for r in rows], [2.0])
+
+    async def test_create_device_stores_device_type(self):
+        user = await db.create_user("a@b.pl", "h")
+        device = await db.create_device(user, "Czujnik wody", "tokw", "woda")
+
+        self.assertEqual(device["device_type"], "woda")
+
+        stored = await db.get_device(user, device["id"])
+        self.assertEqual(stored["device_type"], "woda")
+
+        listed = await db.list_devices(user)
+        self.assertEqual(listed[0]["device_type"], "woda")
+
+        tokens = await db.load_all_tokens()
+        self.assertEqual(tokens["tokw"], {"device_id": device["id"], "device_type": "woda"})
+
+    async def test_init_db_migrates_devices_table_missing_device_type(self):
+        # Symulujemy bazę założoną przed wprowadzeniem typów czujników (bez kolumny device_type)
+        async with db._db() as conn:
+            await conn.execute("DROP TABLE devices")
+            await conn.execute("""
+                CREATE TABLE devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await conn.commit()
+
+        await db.init_db()
+
+        user = await db.create_user("stary@x.pl", "h")
+        device = await db.create_device(user, "Stare urządzenie", "tok-stary", "prad")
+
+        self.assertEqual(device["device_type"], "prad")
 
 
 if __name__ == "__main__":

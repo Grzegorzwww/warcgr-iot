@@ -4,6 +4,8 @@ from pathlib import Path
 
 import aiosqlite
 
+from portal.device_types import DEFAULT_DEVICE_TYPE
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -28,6 +30,15 @@ async def _db():
         yield db
 
 
+async def _ensure_column(db, table: str, column: str, ddl: str):
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    columns = [row[1] for row in await cursor.fetchall()]
+    await cursor.close()
+
+    if column not in columns:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 async def init_db():
     async with _db() as db:
         await db.execute("""
@@ -48,15 +59,20 @@ async def init_db():
             )
         """)
 
-        await db.execute("""
+        await db.execute(f"""
             CREATE TABLE IF NOT EXISTS devices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name TEXT NOT NULL,
                 token TEXT NOT NULL UNIQUE,
+                device_type TEXT NOT NULL DEFAULT '{DEFAULT_DEVICE_TYPE}',
                 created_at TEXT NOT NULL
             )
         """)
+
+        # Migracja: baza założona przed wprowadzeniem typów czujników nie ma
+        # jeszcze tej kolumny – dogrywamy ją, żeby nie zepsuć istniejących danych.
+        await _ensure_column(db, "devices", "device_type", f"TEXT NOT NULL DEFAULT '{DEFAULT_DEVICE_TYPE}'")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS readings (
@@ -155,7 +171,7 @@ async def list_devices(user_id: int):
     async with _db() as db:
         cursor = await db.execute(
             """
-            SELECT id, name, token, created_at
+            SELECT id, name, token, device_type, created_at
             FROM devices
             WHERE user_id = ?
             ORDER BY id
@@ -166,7 +182,7 @@ async def list_devices(user_id: int):
         await cursor.close()
 
     return [
-        {"id": r[0], "name": r[1], "token": r[2], "created_at": r[3]}
+        {"id": r[0], "name": r[1], "token": r[2], "device_type": r[3], "created_at": r[4]}
         for r in rows
     ]
 
@@ -175,7 +191,7 @@ async def get_device(user_id: int, device_id: int):
     async with _db() as db:
         cursor = await db.execute(
             """
-            SELECT id, name, token, created_at
+            SELECT id, name, token, device_type, created_at
             FROM devices
             WHERE id = ? AND user_id = ?
             """,
@@ -187,7 +203,13 @@ async def get_device(user_id: int, device_id: int):
     if row is None:
         return None
 
-    return {"id": row[0], "name": row[1], "token": row[2], "created_at": row[3]}
+    return {
+        "id": row[0],
+        "name": row[1],
+        "token": row[2],
+        "device_type": row[3],
+        "created_at": row[4],
+    }
 
 
 async def count_devices(user_id: int) -> int:
@@ -202,19 +224,25 @@ async def count_devices(user_id: int) -> int:
     return row[0]
 
 
-async def create_device(user_id: int, name: str, token: str):
+async def create_device(user_id: int, name: str, token: str, device_type: str):
     created_at = _now().isoformat()
 
     async with _db() as db:
         cursor = await db.execute(
-            "INSERT INTO devices (user_id, name, token, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, name, token, created_at),
+            "INSERT INTO devices (user_id, name, token, device_type, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, name, token, device_type, created_at),
         )
         await db.commit()
 
         device_id = cursor.lastrowid
 
-    return {"id": device_id, "name": name, "token": token, "created_at": created_at}
+    return {
+        "id": device_id,
+        "name": name,
+        "token": token,
+        "device_type": device_type,
+        "created_at": created_at,
+    }
 
 
 async def delete_device(user_id: int, device_id: int):
@@ -236,11 +264,14 @@ async def delete_device(user_id: int, device_id: int):
 
 async def load_all_tokens():
     async with _db() as db:
-        cursor = await db.execute("SELECT token, id FROM devices")
+        cursor = await db.execute("SELECT token, id, device_type FROM devices")
         rows = await cursor.fetchall()
         await cursor.close()
 
-    return {token: device_id for token, device_id in rows}
+    return {
+        token: {"device_id": device_id, "device_type": device_type}
+        for token, device_id, device_type in rows
+    }
 
 
 # ---------- Pomiary ----------

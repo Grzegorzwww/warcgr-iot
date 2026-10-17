@@ -9,6 +9,7 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 
 from portal import db
+from portal.device_types import DEVICE_TYPES
 
 
 load_dotenv()
@@ -20,36 +21,21 @@ MQTT_PORT = int(os.getenv("PORTAL_MQTT_PORT", os.getenv("MQTT_PORT", "1883")))
 MQTT_USER = os.getenv("PORTAL_MQTT_USER", os.getenv("MQTT_USER"))
 MQTT_PASSWORD = os.getenv("PORTAL_MQTT_PASSWORD", os.getenv("MQTT_PASSWORD"))
 
-# Topic urządzenia:  <token>/zurzycie_pradu/<metryka>
-# (oraz <token>/zurzycie_pradu  = stan licznika w kWh)
-SUBSCRIPTIONS = [
-    ("+/zurzycie_pradu", 0),
-    ("+/zurzycie_pradu/#", 0),
-]
+# Topic urządzenia:  <token>/<topic typu>[/<metryka>]  (patrz portal/device_types.py)
+# np. <token>/zurzycie_pradu/kwh  albo  <token>/temperatura_wody
+SUBSCRIPTIONS = []
 
-METRICS = {
-    "kwh",
-    "power_w",
-    "kwh_last_1h",
-    "kwh_last_3h",
-    "kwh_last_24h",
-    "cost_last_24h",
-    "pulses",
-    "history_hours",
-    "pulse_width_ms",
-    "rejected_flashes",
-}
+for _config in DEVICE_TYPES.values():
+    SUBSCRIPTIONS.append((f"+/{_config['topic']}", 0))
+    SUBSCRIPTIONS.append((f"+/{_config['topic']}/#", 0))
 
-# Do historii zapisujemy tylko to, z czego rysujemy wykresy
-STORED_METRICS = {"kwh", "power_w"}
-
-# Urządzenie raportuje co 60 s – po 3 minutach ciszy uznajemy je za offline
+# Urządzenie raportuje przynajmniej raz na kilka minut – po 3 minutach ciszy uznajemy je za offline
 ONLINE_TIMEOUT_S = 180
 
 MAX_PAYLOAD_LENGTH = 32
 
 
-# token -> id urządzenia (tylko zarejestrowane; reszta jest ignorowana)
+# token -> {"device_id":, "device_type":} (tylko zarejestrowane; reszta jest ignorowana)
 known_tokens = {}
 
 # token -> {metryka: ostatnia wartość (tekst)}
@@ -67,8 +53,8 @@ def set_known_tokens(tokens: dict):
     known_tokens.update(tokens)
 
 
-def register_token(token: str, device_id: int):
-    known_tokens[token] = device_id
+def register_token(token: str, device_id: int, device_type: str):
+    known_tokens[token] = {"device_id": device_id, "device_type": device_type}
 
 
 def forget_token(token: str):
@@ -83,38 +69,44 @@ def is_online(token: str) -> bool:
     return seen is not None and time.time() - seen <= ONLINE_TIMEOUT_S
 
 
-def parse_topic(topic: str) -> Optional[tuple]:
-    """`<token>/zurzycie_pradu[/<metryka>]` -> (token, metryka) albo None."""
-    parts = topic.split("/")
+def parse_topic(topic: str, device_type: str) -> Optional[str]:
+    """`<token>/<topic typu>[/<metryka>]` -> nazwa metryki albo None.
 
-    if len(parts) not in (2, 3) or parts[1] != "zurzycie_pradu":
+    Zakłada, że `topic` zaczyna się tokenem urządzenia o podanym `device_type`
+    (dopasowanie tokenu robi `process_message`); tutaj sprawdzamy tylko, czy
+    drugi człon zgadza się z topikiem danego typu czujnika i czy metryka jest
+    dla niego dozwolona.
+    """
+    config = DEVICE_TYPES.get(device_type)
+
+    if config is None:
         return None
 
-    token = parts[0]
+    parts = topic.split("/")
 
-    if not token:
+    if len(parts) not in (2, 3) or not parts[0] or parts[1] != config["topic"]:
         return None
 
     if len(parts) == 2:
-        return token, "kwh"
+        return config["default_metric"]
 
-    if parts[2] not in METRICS:
-        return None
+    metric = parts[2]
 
-    return token, parts[2]
+    return metric if metric in config["metrics"] else None
 
 
 def process_message(topic: str, payload: str) -> Optional[tuple]:
-    """Aktualizuje stan w pamięci. Zwraca (device_id, metryka, wartość) lub None."""
-    parsed = parse_topic(topic)
+    """Aktualizuje stan w pamięci. Zwraca (device_id, device_type, metryka, wartość) lub None."""
+    token = topic.split("/", 1)[0]
+    info = known_tokens.get(token)
 
-    if parsed is None:
+    if info is None:
         return None
 
-    token, metric = parsed
-    device_id = known_tokens.get(token)
+    device_type = info["device_type"]
+    metric = parse_topic(topic, device_type)
 
-    if device_id is None:
+    if metric is None:
         return None
 
     payload = payload.strip()
@@ -133,7 +125,7 @@ def process_message(topic: str, payload: str) -> Optional[tuple]:
     latest.setdefault(token, {})[metric] = payload
     last_seen[token] = time.time()
 
-    return device_id, metric, value
+    return info["device_id"], device_type, metric, value
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -154,9 +146,10 @@ def on_message(client, userdata, msg):
     if result is None or _loop is None:
         return
 
-    device_id, metric, value = result
+    device_id, device_type, metric, value = result
+    stored_metrics = DEVICE_TYPES.get(device_type, {}).get("stored_metrics", set())
 
-    if metric in STORED_METRICS:
+    if metric in stored_metrics:
         asyncio.run_coroutine_threadsafe(
             db.save_reading(device_id, metric, value),
             _loop,

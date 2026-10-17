@@ -297,7 +297,15 @@ I właśnie dlatego obecna architektura MQTT → FastAPI → SQLite → WWW jest
 ## Portal użytkowników (api.warcgr.pl)
 
 Osobny moduł `portal/` (własny proces i baza `data/portal.db`), niezależny od panelu `iot.warcgr.pl`.
-Każdy użytkownik rejestruje się e-mailem i hasłem, dodaje urządzenia ESP i widzi tylko monitoring zużycia prądu.
+Każdy użytkownik rejestruje się e-mailem i hasłem i dodaje własne urządzenia ESP. Każde urządzenie ma
+przypisany jeden typ czujnika:
+
+- **Zużycie prądu** – moc chwilowa, stan licznika w kWh, zużycie 1h/3h/24h, opcjonalny koszt.
+- **Temperatura wody** – pojedyncza wartość w °C, z wykresem zmian 1h/3h/24h/3 dni.
+
+W panelu widać tylko te typy pomiarów, dla których użytkownik faktycznie dodał urządzenie –
+np. ktoś bez czujnika wody nie zobaczy żadnych kart ani wykresów związanych z temperaturą.
+Dodanie kolejnego typu czujnika w przyszłości to tylko nowy wpis w `portal/device_types.py`.
 
 Uruchomienie:
 
@@ -309,8 +317,9 @@ Cloudflare Tunnel: `api.warcgr.pl` → `http://127.0.0.1:8005`.
 
 ### Token urządzenia
 
-Po dodaniu urządzenia w panelu użytkownik dostaje losowy token (192 bity, widoczny jako tekst i kod QR).
-ESP publikuje na broker pod tematami z tym tokenem:
+Po dodaniu urządzenia w panelu użytkownik wybiera typ czujnika i dostaje losowy token
+(192 bity, widoczny jako tekst i kod QR). ESP publikuje na broker pod tematami zależnymi
+od wybranego typu:
 
 ```
 <token>/zurzycie_pradu/kwh
@@ -319,8 +328,16 @@ ESP publikuje na broker pod tematami z tym tokenem:
 <token>/zurzycie_pradu/pulses | history_hours | pulse_width_ms | rejected_flashes
 ```
 
-Temat `<token>/zurzycie_pradu` bez metryki jest traktowany jak `kwh`.
-Wiadomości z nieznanym tokenem (także z tematów `wesola88/...`) portal ignoruje.
+lub dla czujnika temperatury wody:
+
+```
+<token>/temperatura_wody
+```
+
+Temat `<token>/zurzycie_pradu` (bez metryki) jest traktowany jak `kwh`, a `<token>/temperatura_wody`
+(bez metryki) jak `temperatura`. Wiadomości z nieznanym tokenem (także z tematów `wesola88/...`
+czy `piec_gazowy/temperatura_wody` używanych przez istniejący panel) portal ignoruje – ingest
+sprawdza token względem zarejestrowanych urządzeń, więc nazwy tematów mogą się pokrywać bez kolizji.
 Portal tylko czyta z MQTT i niczego nie publikuje.
 
 ### Ograniczenia MVP
@@ -330,6 +347,6 @@ Portal tylko czyta z MQTT i niczego nie publikuje.
   Sekretem jest sam token. W przyszłości można dodać ACL lub osobne dane logowania per urządzenie.
 - Limity prób logowania i rejestracji są w pamięci procesu.
 - Zapytania zmieniające dane wymagają nagłówka `X-Requested-With: warcgr-portal` (ochrona CSRF).
-- Zapisywane są tylko `kwh` i `power_w`, reszta to ostatnie wartości w pamięci.
+- Zapisywane są tylko `kwh`, `power_w` i `temperatura`, reszta to ostatnie wartości w pamięci.
 
 Testy: `python3 -m unittest discover -s tests`
