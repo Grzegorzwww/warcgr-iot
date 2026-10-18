@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from portal import db, ingest
+from portal.main import DeviceCreate
+from pydantic import ValidationError
 from portal.device_types import DEVICE_TYPES
 from portal.security import (
     Throttle,
@@ -60,6 +62,16 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(all(throttle.allow("k") for _ in range(3)))
         self.assertFalse(throttle.allow("k"))
         self.assertTrue(throttle.allow("inny"))
+
+
+class DeviceCreateTests(unittest.TestCase):
+    def test_device_type_is_required(self):
+        # Brak typu nie może po cichu dać "prad" (tak powstały błędne urządzenia)
+        with self.assertRaises(ValidationError):
+            DeviceCreate(name="temp")
+
+    def test_device_type_is_kept(self):
+        self.assertEqual(DeviceCreate(name="temp", device_type="woda").device_type, "woda")
 
 
 class IngestTests(unittest.TestCase):

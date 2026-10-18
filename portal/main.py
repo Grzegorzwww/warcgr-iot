@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from portal import db, ingest
-from portal.device_types import DEFAULT_DEVICE_TYPE, DEVICE_TYPES
+from portal.device_types import DEVICE_TYPES
 from portal.security import (
     DUMMY_HASH,
     MAX_PASSWORD_LENGTH,
@@ -262,7 +262,9 @@ async def me(user: dict = Depends(current_user)):
 
 class DeviceCreate(BaseModel):
     name: str = Field(max_length=40)
-    device_type: str = Field(default=DEFAULT_DEVICE_TYPE, max_length=20)
+    # Wymagane celowo: brak pola nie może po cichu oznaczać typu "prad"
+    # (np. stary, zbuforowany frontend sprzed dodania wyboru typu).
+    device_type: str = Field(max_length=20)
 
 
 @app.get("/api/devices")
