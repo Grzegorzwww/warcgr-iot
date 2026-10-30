@@ -294,6 +294,36 @@ dzisiaj wyprodukował 42.7 kWh ciepła
 
 I właśnie dlatego obecna architektura MQTT → FastAPI → SQLite → WWW jest dobrym fundamentem — kolejne czujniki możemy po prostu dodawać jako kolejne MQTT topics, zamiast przebudowywać cały system.
 
+## Zakładka Analiza (iot.warcgr.pl)
+
+Zakładka **Analiza** zastąpiła w dolnym pasku zakładkę Wykresy. Dotychczasowe wykresy
+są dostępne przez przełącznik *Analiza / Wykresy* u góry zakładki (stary adres `#wykresy` też działa).
+
+Czujniki są wyszukiwane po ostatnim członie topicu (prefiks dowolny pod subskrybowanymi
+`wesola88/#`, `piec_gazowy/#`, `piec_weglowy/#`):
+
+| Rola | Nazwy (wg priorytetu) | Wymuszenie w `.env` |
+|---|---|---|
+| temperatura w domu | `temperatura_domu`, `temperature` | `ANALYSIS_TOPIC_INSIDE` |
+| temperatura na zewnątrz | `temperature_outside` | `ANALYSIS_TOPIC_OUTSIDE` |
+| wilgotność w domu | `humidity` | `ANALYSIS_TOPIC_HUMIDITY` |
+| ciśnienie | `pressure` | `ANALYSIS_TOPIC_PRESSURE` |
+
+Pokazuje bieżące temperatury i różnicę dom–zewnątrz, min/śr./max w zakresie 24h/3d/7d,
+wykresy oraz **charakterystykę cieplną budynku** (`GET /api/analysis?hours=24`).
+
+Charakterystyka wynika z prawa stygnięcia Newtona `dT_wew/dt = -k·(T_wew - T_zew)`.
+Z okresów, w których temperatura w domu spada (min. 1,5 h, spadek ≥ 0,3 °C, różnica
+dom–zewnątrz ≥ 3 °C, ostatnie 7 dni) liczone jest `k = Σ spadek / Σ ∫(T_wew - T_zew) dt`,
+a z niego:
+
+- **stała czasowa τ = 1/k** – po tym czasie bez ogrzewania różnica temperatur maleje do ~37 %,
+- spadek temperatury przy różnicy 10 °C oraz przy obecnej różnicy [°C/h],
+- prognoza temperatury w domu za 6 h bez ogrzewania.
+
+Latem (mała różnica temperatur) charakterystyka nie jest liczona – panel pokazuje komunikat.
+Obliczenia: `app/analysis.py`, testy: `tests/test_analysis.py`.
+
 ## Portal użytkowników (api.warcgr.pl)
 
 Osobny moduł `portal/` (własny proces i baza `data/portal.db`), niezależny od panelu `iot.warcgr.pl`.

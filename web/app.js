@@ -182,7 +182,7 @@ const TOPICS = Object.fromEntries(
     Object.entries(TOPIC_ALIASES).map(([key, aliases]) => [key, aliases[0]])
 );
 
-const TABS = ["pulpit", "gaz", "prad", "wykresy", "ustawienia"];
+const TABS = ["pulpit", "gaz", "prad", "analiza", "wykresy", "ustawienia"];
 const TOKEN_KEY = "control_token";
 const STATUS_INTERVAL_MS = 5000;
 const CHART_INTERVAL_MS = 60000;
@@ -192,6 +192,9 @@ let config = { control_enabled: false, modes: [], settings: {} };
 let lastState = {};     // ostatnie wartości z MQTT (to, co raportuje ESP32)
 let desired = {};       // ostatnio ustawione z panelu (zapisane na serwerze)
 let selectedHours = 24;
+let analysisHours = 24;
+let analysis = null;    // ostatnia odpowiedź /api/analysis
+let analysisSeq = 0;
 let currentTab = "pulpit";
 
 const pending = {};     // klucz -> termin (ms) oczekiwania na potwierdzenie
@@ -419,7 +422,10 @@ function showTab() {
     });
 
     document.querySelectorAll(".tabbar a").forEach(a => {
-        a.classList.toggle("active", a.getAttribute("href") === "#" + currentTab);
+        a.classList.toggle(
+            "active",
+            a.getAttribute("href") === "#" + currentTab || a.dataset.also === currentTab
+        );
     });
 
     window.scrollTo(0, 0);
@@ -427,6 +433,11 @@ function showTab() {
     if (currentTab === "wykresy" || currentTab === "gaz" || currentTab === "prad") {
         Object.values(charts).forEach(chart => chart.resize());
         loadCharts();
+    }
+
+    if (currentTab === "analiza") {
+        Object.values(charts).forEach(chart => chart.resize());
+        loadAnalysis();
     }
 }
 
@@ -1306,6 +1317,7 @@ async function loadStatus() {
 
     updateEspStatus();
     renderControls();
+    renderAnalysisCurrent();
 
     setText("last-update", new Date().toLocaleTimeString("pl-PL"));
 }
@@ -1319,10 +1331,10 @@ function parseTime(ts) {
 }
 
 
-function formatTick(ms) {
+function formatTick(ms, hours = selectedHours) {
     const d = new Date(ms);
 
-    if (selectedHours <= 24) {
+    if (hours <= 24) {
         return d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
     }
 
@@ -1346,7 +1358,7 @@ function makeDataset(label, color, extra = {}) {
 }
 
 
-function makeChart(canvasId, datasets, unit) {
+function makeChart(canvasId, datasets, unit, getHours = () => selectedHours) {
     const muted = getComputedStyle(document.documentElement)
         .getPropertyValue("--muted").trim();
 
@@ -1380,7 +1392,7 @@ function makeChart(canvasId, datasets, unit) {
                         color: muted,
                         maxTicksLimit: 5,
                         maxRotation: 0,
-                        callback: value => formatTick(value)
+                        callback: value => formatTick(value, getHours())
                     },
                     grid: { color: grid }
                 },
@@ -1430,6 +1442,16 @@ function initCharts() {
     charts.elecPower = makeChart("chart-elec-power", [
         makeDataset("Moc chwilowa", "#f97316", { fill: true })
     ], "W");
+
+    charts.anTemp = makeChart("chart-an-temp", [
+        makeDataset("W domu", "#f97316"),
+        makeDataset("Na zewnątrz", "#38bdf8"),
+        makeDataset("Okresy stygnięcia", "#22c55e", { borderWidth: 4 })
+    ], "°C", () => analysisHours);
+
+    charts.anDelta = makeChart("chart-an-delta", [
+        makeDataset("Różnica", "#a78bfa", { fill: true })
+    ], "°C", () => analysisHours);
 }
 
 
@@ -1446,12 +1468,15 @@ async function fetchHistory(topic) {
 
 
 function setChartData(chart, series, min, max) {
+    // Punkty z y = null to przerwy w danych (linia się urywa)
+    const present = data => data.filter(p => p.y !== null && p.y !== undefined).length;
+
     series.forEach((data, i) => {
         const ds = chart.data.datasets[i];
 
         ds.data = data;
         // Przy małej liczbie punktów pokazujemy kropki, inaczej pojedynczy pomiar byłby niewidoczny
-        ds.pointRadius = !ds.stepped && data.length < 30 ? 3 : 0;
+        ds.pointRadius = !ds.stepped && present(data) < 30 ? 3 : 0;
     });
 
     chart.options.scales.x.min = min;
@@ -1460,7 +1485,7 @@ function setChartData(chart, series, min, max) {
 
     chart.canvas.parentElement.classList.toggle(
         "empty",
-        series.every(data => data.length === 0)
+        series.every(data => present(data) === 0)
     );
 }
 
@@ -1515,6 +1540,137 @@ function initRangeButtons() {
             loadCharts();
         });
     });
+
+    const analysisButtons = document.querySelectorAll("#analysis-range button");
+
+    analysisButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+            analysisHours = Number(btn.dataset.hours);
+            analysisButtons.forEach(b => b.classList.toggle("active", b === btn));
+            loadAnalysis();
+        });
+    });
+}
+
+
+/* ---------- Analiza ---------- */
+
+function liveNumber(topic, fallback) {
+    const live = topic ? parseNum(lastState[topic]) : NaN;
+
+    return isNaN(live) ? parseNum(fallback) : live;
+}
+
+
+// Bieżące wartości odświeżane co 5 s ze statusu MQTT (topici z ostatniej analizy)
+function renderAnalysisCurrent() {
+    if (!analysis) {
+        return;
+    }
+
+    const topics = analysis.topics || {};
+    const current = analysis.current || {};
+
+    const inside = liveNumber(topics.inside, current.inside);
+    const outside = liveNumber(topics.outside, current.outside);
+    const delta = inside - outside;
+
+    setText("an-inside", formatNumber(inside));
+    setText("an-outside", formatNumber(outside));
+    setText("an-delta", formatNumber(delta));
+    setText("an-humidity", formatNumber(liveNumber(topics.humidity, current.humidity)));
+    setText("an-pressure", formatNumber(liveNumber(topics.pressure, current.pressure)));
+
+    const thermal = analysis.thermal || {};
+    const k = thermal.status === "ok" ? thermal.k_per_hour : NaN;
+    const cooling = delta > 0 && !isNaN(k);
+
+    // Prawo Newtona: tempo = k·ΔT, prognoza = Tzew + ΔT·e^(−k·t)
+    setText("an-rate-now", cooling ? (k * delta).toFixed(2) : "--");
+
+    const forecast = outside + delta * Math.exp(-k * thermal.forecast_hours);
+    setText("thermal-forecast", cooling ? `${forecast.toFixed(1)} °C` : "--");
+}
+
+
+function renderAnalysis() {
+    const topics = analysis.topics || {};
+    const missing = [];
+
+    if (!topics.inside) {
+        missing.push("w domu (temperatura_domu)");
+    }
+
+    if (!topics.outside) {
+        missing.push("na zewnątrz (temperature_outside)");
+    }
+
+    $("analysis-note").hidden = missing.length === 0;
+    $("analysis-note").textContent = missing.length
+        ? `Brak danych z czujnika temperatury ${missing.join(" ani ")}.`
+        : "";
+
+    for (const key of ["inside", "outside", "delta"]) {
+        const stats = analysis.stats[key];
+
+        for (const field of ["min", "avg", "max"]) {
+            setText(`st-${key}-${field}`, stats ? stats[field].toFixed(1) : "--");
+        }
+    }
+
+    const thermal = analysis.thermal;
+    const ok = thermal.status === "ok";
+
+    setVisible("thermal-details", ok);
+    setVisible("thermal-message", !ok);
+    setText("thermal-message", thermal.message || "");
+
+    if (ok) {
+        setText("thermal-tau", `${thermal.tau_hours.toFixed(0)} h`);
+        setText("thermal-rating", thermal.rating);
+        setText("thermal-loss10", `${thermal.loss_per_10c.toFixed(2)} °C/h`);
+        setText("thermal-forecast-label", `Za ${thermal.forecast_hours} h bez ogrzewania`);
+        setText(
+            "thermal-confidence",
+            `${thermal.confidence} (${thermal.episodes_count} okr., ${thermal.analysed_hours.toFixed(0)} h)`
+        );
+    }
+
+    const series = analysis.series;
+    const points = values => series.t.map((x, i) => ({ x, y: values[i] }));
+    const now = Date.now();
+    const min = now - analysisHours * 3600 * 1000;
+
+    setChartData(charts.anTemp, [points(series.inside), points(series.outside), points(series.cooling)], min, now);
+    setChartData(charts.anDelta, [points(series.delta)], min, now);
+
+    const used = [topics.inside, topics.outside, topics.humidity, topics.pressure].filter(Boolean);
+    setText("analysis-topics", used.length ? `Czujniki: ${used.join(", ")}` : "");
+
+    renderAnalysisCurrent();
+}
+
+
+async function loadAnalysis() {
+    if (!charts.anTemp) {
+        return;
+    }
+
+    // Szybkie przełączanie zakresu – liczy się tylko ostatnie zapytanie
+    const seq = ++analysisSeq;
+
+    try {
+        const data = await fetchJson(`/api/analysis?hours=${analysisHours}`);
+
+        if (seq !== analysisSeq) {
+            return;
+        }
+
+        analysis = data;
+        renderAnalysis();
+    } catch (error) {
+        console.error("Błąd pobierania analizy:", error);
+    }
 }
 
 
@@ -1567,11 +1723,19 @@ window.addEventListener("DOMContentLoaded", async () => {
         loadCharts();
     }
 
+    if (currentTab === "analiza") {
+        loadAnalysis();
+    }
+
     setInterval(loadStatus, STATUS_INTERVAL_MS);
 
     setInterval(() => {
         if ((currentTab === "wykresy" || currentTab === "gaz" || currentTab === "prad") && !document.hidden) {
             loadCharts();
+        }
+
+        if (currentTab === "analiza" && !document.hidden) {
+            loadAnalysis();
         }
     }, CHART_INTERVAL_MS);
 });

@@ -12,10 +12,14 @@ from pydantic import BaseModel
 from app.database import (
     init_db,
     get_history,
+    get_topics,
+    get_last_timestamp,
     delete_old_measurements,
     save_setting,
     get_settings,
 )
+
+from app.analysis import ANALYSIS_HOURS, build_analysis, topic_candidates
 
 from app.mqtt import state, start_mqtt_thread, publish_command
 
@@ -43,6 +47,17 @@ DEVICE_ALIASES = [
 ]
 
 MODES = ["ON", "OFF", "AUTO"]
+
+# Czujniki do zakładki Analiza. Topic jest wyszukiwany po ostatnim członie
+# nazwy (np. wesola88/dom/temperatura_domu), w kolejności priorytetu nazw.
+# Pełną ścieżkę można wymusić w .env: ANALYSIS_TOPIC_INSIDE, ANALYSIS_TOPIC_OUTSIDE,
+# ANALYSIS_TOPIC_HUMIDITY, ANALYSIS_TOPIC_PRESSURE.
+ANALYSIS_SENSORS = {
+    "inside": ["temperatura_domu", "temperature"],
+    "outside": ["temperature_outside"],
+    "humidity": ["humidity"],
+    "pressure": ["pressure"],
+}
 
 # Parametry ustawiane z panelu.
 # Komenda idzie na  piec_gazowy/<klucz>/set,
@@ -358,6 +373,81 @@ def downsample(data, max_points: int):
             "timestamp": part[-1]["timestamp"],
             "value": sum(p["value"] for p in part) / len(part),
         })
+
+    return result
+
+
+async def resolve_analysis_topics():
+    live_topics = list(state)
+    db_topics = None
+    resolved = {}
+
+    for role, names in ANALYSIS_SENSORS.items():
+        override = os.getenv(f"ANALYSIS_TOPIC_{role.upper()}")
+
+        if override:
+            resolved[role] = override
+            continue
+
+        matches = topic_candidates(names, live_topics)
+
+        if not matches:
+            if db_topics is None:
+                db_topics = await get_topics()
+
+            matches = topic_candidates(names, db_topics)
+
+        if len(matches) > 1:
+            # Kilka urządzeń z tą samą nazwą – bierzemy najnowsze
+            stamps = {topic: await get_last_timestamp(topic) or "" for topic in matches}
+            matches = [max(matches, key=lambda topic: stamps[topic])]
+
+        resolved[role] = matches[0] if matches else None
+
+    return resolved
+
+
+def state_number(topic):
+    if topic is None:
+        return None
+
+    try:
+        value = float(str(state.get(topic, "")).replace(",", "."))
+    except ValueError:
+        return None
+
+    return value if math.isfinite(value) else None
+
+
+@app.get("/api/analysis")
+async def analysis(hours: int = 24):
+    if hours < 1 or hours > ANALYSIS_HOURS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"hours must be between 1 and {ANALYSIS_HOURS}"
+        )
+
+    topics = await resolve_analysis_topics()
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=ANALYSIS_HOURS)
+
+    inside_rows = await get_history(topics["inside"], since) if topics["inside"] else []
+    outside_rows = await get_history(topics["outside"], since) if topics["outside"] else []
+
+    # Obliczenia na kilkudziesięciu tysiącach punktów – poza pętlą zdarzeń
+    result = await asyncio.to_thread(
+        build_analysis,
+        inside_rows,
+        outside_rows,
+        now.timestamp(),
+        hours,
+        state_number(topics["inside"]),
+        state_number(topics["outside"]),
+    )
+
+    result["topics"] = topics
+    result["current"]["humidity"] = state_number(topics["humidity"])
+    result["current"]["pressure"] = state_number(topics["pressure"])
 
     return result
 

@@ -504,6 +504,73 @@ button:disabled {
     font-size: 14px;
 }
 
+/* ---------- Analiza ---------- */
+
+.subnav {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 12px;
+    border-radius: 14px;
+    background: var(--surface-2);
+}
+
+.subnav a {
+    flex: 1;
+    padding: 10px 0;
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+}
+
+.subnav a.active {
+    background: var(--accent);
+    color: #04202e;
+}
+
+.stat-row {
+    padding: 6px 0;
+}
+
+.stat-row .badge {
+    font-size: 14px;
+}
+
+.small-text {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+}
+
+.stats-table th,
+.stats-table td {
+    padding: 6px 4px;
+    text-align: right;
+}
+
+.stats-table th {
+    color: var(--muted);
+    font-weight: 600;
+}
+
+.stats-table tbody th {
+    text-align: left;
+}
+
+.stats-table tbody tr + tr {
+    border-top: 1px solid var(--surface-2);
+}
+
 /* ---------- Dolny pasek zakładek ---------- */
 
 .tabbar {

@@ -308,8 +308,136 @@
         </div>
     </section>
 
+    <!-- ===== ANALIZA ===== -->
+    <section class="tab" data-tab="analiza" hidden>
+
+        <nav class="subnav">
+            <a href="#analiza" class="active">Analiza</a>
+            <a href="#wykresy">Wykresy</a>
+        </nav>
+
+        <p class="note" id="analysis-note" hidden></p>
+
+        <div class="cards">
+            <div class="card compact">
+                <div class="card-label">W domu</div>
+                <div class="card-value">
+                    <span id="an-inside">--</span><span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Na zewnątrz</div>
+                <div class="card-value">
+                    <span id="an-outside">--</span><span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Różnica dom – zewn.</div>
+                <div class="card-value">
+                    <span id="an-delta">--</span><span class="unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Tempo stygnięcia teraz</div>
+                <div class="card-value">
+                    <span id="an-rate-now">--</span><span class="unit">°C/h</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Wilgotność (dom)</div>
+                <div class="card-value">
+                    <span id="an-humidity">--</span><span class="unit">%</span>
+                </div>
+            </div>
+
+            <div class="card compact">
+                <div class="card-label">Ciśnienie</div>
+                <div class="card-value">
+                    <span id="an-pressure">--</span><span class="unit">hPa</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Charakterystyka cieplna budynku</h2>
+
+            <p class="muted" id="thermal-message" hidden></p>
+
+            <div id="thermal-details" hidden>
+                <div class="row stat-row">
+                    <span class="card-label">Stała czasowa τ</span>
+                    <span id="thermal-tau" class="badge">--</span>
+                </div>
+                <div class="row stat-row">
+                    <span class="card-label">Ocena</span>
+                    <span id="thermal-rating" class="badge">--</span>
+                </div>
+                <div class="row stat-row">
+                    <span class="card-label">Spadek przy różnicy 10 °C</span>
+                    <span id="thermal-loss10" class="badge">--</span>
+                </div>
+                <div class="row stat-row">
+                    <span class="card-label" id="thermal-forecast-label">Za 6 h bez ogrzewania</span>
+                    <span id="thermal-forecast" class="badge">--</span>
+                </div>
+                <div class="row stat-row">
+                    <span class="card-label">Jakość oszacowania</span>
+                    <span id="thermal-confidence" class="badge">--</span>
+                </div>
+
+                <p class="muted small-text">
+                    Liczone z okresów, w których temperatura w domu spadała (ostatnie 7 dni,
+                    na wykresie zaznaczone na zielono). τ to czas, po którym bez ogrzewania
+                    różnica temperatur dom–zewnątrz maleje do ok. 37%. Im większe τ, tym wolniej
+                    dom traci ciepło. Słońce, wietrzenie i bezwładność grzejników wpływają na wynik.
+                </p>
+            </div>
+        </div>
+
+        <div class="segmented small" id="analysis-range">
+            <button type="button" data-hours="24" class="active">24h</button>
+            <button type="button" data-hours="72">3d</button>
+            <button type="button" data-hours="168">7d</button>
+        </div>
+
+        <div class="panel">
+            <h3>Porównanie w wybranym zakresie</h3>
+            <table class="stats-table">
+                <thead>
+                    <tr><th></th><th>min</th><th>śr.</th><th>max</th></tr>
+                </thead>
+                <tbody>
+                    <tr><th>W domu</th><td id="st-inside-min">--</td><td id="st-inside-avg">--</td><td id="st-inside-max">--</td></tr>
+                    <tr><th>Na zewnątrz</th><td id="st-outside-min">--</td><td id="st-outside-avg">--</td><td id="st-outside-max">--</td></tr>
+                    <tr><th>Różnica</th><td id="st-delta-min">--</td><td id="st-delta-avg">--</td><td id="st-delta-max">--</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="panel">
+            <h3>Temperatura w domu i na zewnątrz</h3>
+            <div class="chart-box"><canvas id="chart-an-temp"></canvas></div>
+        </div>
+
+        <div class="panel">
+            <h3>Różnica temperatur (dom – zewnątrz)</h3>
+            <div class="chart-box"><canvas id="chart-an-delta"></canvas></div>
+        </div>
+
+        <p class="muted small-text" id="analysis-topics"></p>
+    </section>
+
     <!-- ===== WYKRESY ===== -->
     <section class="tab" data-tab="wykresy" hidden>
+
+        <nav class="subnav">
+            <a href="#analiza">Analiza</a>
+            <a href="#wykresy" class="active">Wykresy</a>
+        </nav>
 
         <div class="segmented small" id="range-buttons">
             <button type="button" data-hours="1">1h</button>
@@ -393,9 +521,9 @@
         <svg width="24" height="24" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
         Prąd
     </a>
-    <a href="#wykresy">
+    <a href="#analiza" data-also="wykresy">
         <svg width="24" height="24" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-6"/></svg>
-        Wykresy
+        Analiza
     </a>
     <a href="#ustawienia">
         <svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>

@@ -109,6 +109,27 @@ async def get_history(topic: str, since: datetime):
         for timestamp, value in rows
     ]
 
+async def get_topics():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT DISTINCT topic FROM measurements")
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+    return [row[0] for row in rows]
+
+
+async def get_last_timestamp(topic: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT MAX(timestamp) FROM measurements WHERE topic = ?",
+            (topic,)
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+
+    return row[0]
+
+
 async def delete_old_measurements(days: int = 7):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
