@@ -7,15 +7,17 @@ const CHART_REFRESH_MS = 60000;
 
 const TILES = {
     power_w: ["m-power", 0],
-    kwh: ["m-kwh", 3],
-    kwh_last_1h: ["m-1h", 3],
-    kwh_last_3h: ["m-3h", 3],
-    kwh_last_24h: ["m-24h", 3]
+    kwh: ["m-kwh", 3]
 };
 
 const WATER_TILES = {
     temperatura: ["m-temp", 1]
 };
+
+// Dane z firmware (patrz licznik_gazu_esp32: Configuration.hpp)
+const SETUP_AP_SSID = "ESP32Config";
+const SETUP_AP_PASS = "22446688";
+const SETUP_ADDRESS = "192.168.4.1";
 
 let devices = [];
 let selectedId = null;
@@ -28,7 +30,11 @@ let chartTimer = null;
 let toastTimer = null;
 
 const charts = {};
+// id urządzenia -> otwarty panel na liście: "wizard" | "edit"
+const openPanels = new Map();
 const openQr = new Set();
+// id urządzenia -> ostatnie podsumowanie z /summary
+const summaries = new Map();
 
 
 /* ---------- Pomocnicze ---------- */
@@ -100,7 +106,116 @@ function parseTime(ts) {
 function fmt(value, digits) {
     const n = Number(value);
 
-    return value === undefined || value === null || isNaN(n) ? "--" : n.toFixed(digits);
+    if (value === undefined || value === null || value === "" || !isFinite(n)) {
+        return "--";
+    }
+
+    return n.toLocaleString("pl-PL", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function isNumber(value) {
+    return value !== undefined && value !== null && value !== "" && isFinite(Number(value));
+}
+
+function money(value) {
+    return isNumber(value) ? `≈ ${fmt(value, 2)} zł` : "";
+}
+
+
+function timeAgo(epochSeconds) {
+    const seconds = Math.max(0, Date.now() / 1000 - epochSeconds);
+
+    if (seconds < 60) {
+        return "przed chwilą";
+    }
+
+    if (seconds < 3600) {
+        return `${Math.floor(seconds / 60)} min temu`;
+    }
+
+    if (seconds < 86400) {
+        return `${Math.floor(seconds / 3600)} godz. temu`;
+    }
+
+    const days = Math.floor(seconds / 86400);
+
+    return days === 1 ? "wczoraj" : `${days} dni temu`;
+}
+
+
+function statusInfo(device) {
+    if (device.online) {
+        return { state: "on", text: "Online" };
+    }
+
+    if (device.last_seen) {
+        return { state: "off", text: `Offline · ${timeAgo(device.last_seen)}` };
+    }
+
+    return { state: "never", text: "Nie podłączono" };
+}
+
+
+const ICONS = {
+    prad: "M13 2 4 14h7l-1 8 9-12h-7l1-8z",
+    woda: "M12 2.5S6 9.1 6 13.5a6 6 0 0 0 12 0c0-4.4-6-11-6-11z"
+};
+
+function icon(name) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    const path = document.createElementNS(ns, "path");
+
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    path.setAttribute("d", ICONS[name] || ICONS.prad);
+    svg.append(path);
+
+    return svg;
+}
+
+
+async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (error) {
+            // próbujemy starszej metody poniżej
+        }
+    }
+
+    const area = el("textarea");
+
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    area.setSelectionRange(0, text.length);
+
+    let ok = false;
+
+    try {
+        ok = document.execCommand("copy");
+    } catch (error) {
+        ok = false;
+    }
+
+    area.remove();
+
+    return ok;
+}
+
+
+function selectText(node) {
+    const range = document.createRange();
+    const selection = window.getSelection();
+
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
 }
 
 function storageKey(name) {
@@ -135,6 +250,9 @@ function showAuth() {
     devices = [];
     selectedId = null;
     listSignature = "";
+    openPanels.clear();
+    openQr.clear();
+    summaries.clear();
 
     $("auth-view").hidden = false;
     $("app-view").hidden = true;
@@ -176,6 +294,20 @@ function setView(view) {
     if (view === "measure") {
         Object.values(charts).forEach(chart => chart.resize());
         loadCharts();
+    }
+}
+
+
+// Otwiera kreator podłączania albo edycję urządzenia w zakładce „Urządzenia”
+function openDevicePanel(deviceId, panel) {
+    openPanels.set(deviceId, panel);
+    setView("devices");
+    renderDeviceList();
+
+    const card = document.querySelector(`[data-device-card="${deviceId}"]`);
+
+    if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 }
 
@@ -250,7 +382,7 @@ async function refreshDevices() {
         return;
     }
 
-    const signature = devices.map(d => `${d.id}:${d.name}`).join("|");
+    const signature = devices.map(d => `${d.id}:${d.name}:${d.price_per_kwh}`).join("|");
 
     if (signature !== listSignature) {
         listSignature = signature;
@@ -258,7 +390,7 @@ async function refreshDevices() {
         renderDeviceSelect();
     }
 
-    updateOnlineBadges();
+    updateStatuses();
     renderMeasurements();
 }
 
@@ -288,6 +420,13 @@ function renderDeviceSelect() {
         select.append(option);
     }
 
+    // Przy jednym urządzeniu wybór jest zbędny – pokazujemy samą nazwę
+    const single = devices.length === 1;
+
+    select.hidden = single;
+    $("device-title").hidden = !single;
+    $("device-title").textContent = single ? devices[0].name : "";
+
     if (selectedId !== null) {
         select.value = String(selectedId);
         writeStored("selected-device-id", selectedId);
@@ -296,21 +435,46 @@ function renderDeviceSelect() {
 }
 
 
-function setOnlineBadge(node, online) {
-    node.textContent = online ? "ONLINE" : "OFFLINE";
-    node.classList.toggle("on", online);
-    node.classList.toggle("off", !online);
+function setStatus(node, device) {
+    const info = statusInfo(device);
+
+    node.dataset.state = info.state;
+    node.querySelector(".status-text").textContent = info.text;
 }
 
 
-function updateOnlineBadges() {
-    document.querySelectorAll("[data-online-for]").forEach(node => {
-        const device = devices.find(d => String(d.id) === node.dataset.onlineFor);
+function updateStatuses() {
+    document.querySelectorAll("[data-status-for]").forEach(node => {
+        const device = devices.find(d => String(d.id) === node.dataset.statusFor);
 
         if (device) {
-            setOnlineBadge(node, device.online);
+            setStatus(node, device);
         }
     });
+
+    document.querySelectorAll("[data-wizard-status-for]").forEach(node => {
+        const device = devices.find(d => String(d.id) === node.dataset.wizardStatusFor);
+
+        if (!device) {
+            return;
+        }
+
+        node.classList.toggle("done", device.online);
+        node.querySelector(".status-text").textContent = device.online
+            ? "Urządzenie połączone – dane już spływają!"
+            : "Czekam na pierwsze dane z urządzenia…";
+    });
+}
+
+
+function statusNode(device) {
+    const node = el("span", "status");
+
+    node.append(el("span", "dot"), el("span", "status-text", "--"));
+    node.dataset.statusFor = String(device.id);
+    setStatus(node, device);
+
+    return node;
 }
 
 
@@ -320,62 +484,284 @@ function renderDeviceList() {
     list.replaceChildren();
 
     for (const device of devices) {
-        const panel = el("div", "panel");
+        const panel = el("div", "panel device-card");
+        const openPanel = openPanels.get(device.id);
+
+        panel.dataset.deviceCard = String(device.id);
 
         const head = el("div", "device-head");
-        const nameBox = el("div");
-        const name = el("span", "device-name", device.name);
-        const typeLabel = el("div", "muted small", device.type_label);
-        const badge = el("span", "badge", "--");
+        const typeIcon = el("span", `type-icon ${device.device_type === "woda" ? "water" : "energy"}`);
+        const nameBox = el("div", "device-head-text");
 
-        nameBox.append(name, typeLabel);
-        badge.dataset.onlineFor = String(device.id);
-        head.append(nameBox, badge);
-
-        const token = el("code", "token-box", device.token);
+        typeIcon.append(icon(device.device_type));
+        nameBox.append(el("div", "device-name", device.name), el("div", "muted small", device.type_label));
+        head.append(typeIcon, nameBox, statusNode(device));
 
         const actions = el("div", "device-actions");
-        const copyBtn = el("button", "btn btn-secondary", "Kopiuj token");
-        const qrBtn = el("button", "btn btn-secondary", "Kod QR");
+        const connectBtn = el("button", "btn " + (openPanel === "wizard" ? "btn-primary" : "btn-secondary"), "Podłącz");
+        const editBtn = el("button", "btn " + (openPanel === "edit" ? "btn-primary" : "btn-secondary"), "Edytuj");
         const delBtn = el("button", "btn btn-danger", "Usuń");
 
-        copyBtn.type = qrBtn.type = delBtn.type = "button";
-        actions.append(copyBtn, qrBtn, delBtn);
+        connectBtn.type = editBtn.type = delBtn.type = "button";
+        actions.append(connectBtn, editBtn, delBtn);
 
-        const qrBox = el("div");
-        qrBox.hidden = !openQr.has(device.id);
+        const togglePanel = name => {
+            if (openPanels.get(device.id) === name) {
+                openPanels.delete(device.id);
+            } else {
+                openPanels.set(device.id, name);
+            }
 
-        if (!qrBox.hidden) {
-            renderQr(qrBox, device.token);
+            renderDeviceList();
+        };
+
+        connectBtn.addEventListener("click", () => togglePanel("wizard"));
+        editBtn.addEventListener("click", () => togglePanel("edit"));
+        delBtn.addEventListener("click", () => removeDevice(device));
+
+        panel.append(head, actions);
+
+        if (openPanel === "wizard") {
+            panel.append(buildWizard(device));
+        } else if (openPanel === "edit") {
+            panel.append(buildEditor(device));
         }
 
-        copyBtn.addEventListener("click", async () => {
-            try {
-                await navigator.clipboard.writeText(device.token);
-                toast("Token skopiowany");
-            } catch (error) {
-                toast("Zaznacz token i skopiuj ręcznie", true);
-            }
-        });
+        list.append(panel);
+    }
 
-        qrBtn.addEventListener("click", () => {
-            if (openQr.has(device.id)) {
-                openQr.delete(device.id);
-                qrBox.hidden = true;
-                qrBox.replaceChildren();
+    updateStatuses();
+}
+
+
+function wizardStep(number, title, ...content) {
+    const step = el("li", "step");
+    const body = el("div", "step-body");
+
+    body.append(el("div", "step-title", title), ...content);
+    step.append(el("span", "step-number", String(number)), body);
+
+    return step;
+}
+
+
+function textWithStrong(parts) {
+    // parts: ["zwykły tekst", ["pogrubiony"], ...] – bez innerHTML
+    const p = el("p");
+
+    for (const part of parts) {
+        p.append(Array.isArray(part) ? el("strong", "", part[0]) : document.createTextNode(part));
+    }
+
+    return p;
+}
+
+
+function buildWizard(device) {
+    const box = el("div", "wizard");
+
+    box.append(el("h3", "", "Podłączanie urządzenia"));
+
+    const steps = el("ol", "steps");
+
+    // 1. Token – koniecznie przed przejściem na sieć urządzenia (tam nie ma internetu)
+    const token = el("code", "token-box", device.token);
+    const copyBtn = el("button", "btn btn-primary btn-copy", "Kopiuj token");
+    const step1 = wizardStep(
+        1,
+        "Skopiuj token",
+        el("p", "", "Zrób to teraz – po połączeniu z siecią urządzenia telefon straci dostęp do internetu i tej strony."),
+        token,
+        copyBtn
+    );
+
+    copyBtn.type = "button";
+    copyBtn.addEventListener("click", async () => {
+        if (await copyText(device.token)) {
+            copyBtn.textContent = "Skopiowano ✓";
+            step1.classList.add("done");
+            toast("Token skopiowany");
+        } else {
+            selectText(token);
+            toast("Token zaznaczony – skopiuj go ręcznie", true);
+        }
+    });
+
+    const meterHint = device.device_type === "prad"
+        ? " Możesz też wpisać aktualny stan licznika."
+        : "";
+
+    steps.append(
+        step1,
+        wizardStep(
+            2,
+            "Włącz tryb konfiguracji",
+            el("p", "", "Przytrzymaj przycisk na urządzeniu i – nie puszczając go – podłącz urządzenie do prądu. "
+                + "Puść przycisk po 2–3 sekundach.")
+        ),
+        wizardStep(
+            3,
+            "Połącz się z urządzeniem",
+            textWithStrong(["Otwórz ustawienia Wi-Fi w telefonie i wybierz sieć ", [SETUP_AP_SSID],
+                ". Hasło: ", [SETUP_AP_PASS], "."]),
+            el("p", "muted small", "Jeśli telefon ostrzeże o braku internetu, wybierz „Pozostań połączony”.")
+        ),
+        wizardStep(
+            4,
+            "Wklej token i wybierz swoje Wi-Fi",
+            textWithStrong(["Strona konfiguracji otworzy się sama (jeśli nie – wpisz w przeglądarce ",
+                [SETUP_ADDRESS], "). Wybierz swoją sieć Wi-Fi, wpisz jej hasło, wklej token i zapisz." + meterHint])
+        ),
+        wizardStep(
+            5,
+            "Gotowe",
+            el("p", "", "Urządzenie uruchomi się ponownie i połączy z Twoim Wi-Fi. "
+                + "Wróć do domowej sieci – status poniżej zmieni się sam.")
+        )
+    );
+
+    const waiting = el("div", "wizard-status");
+
+    waiting.append(el("span", "dot"), el("span", "status-text", "--"));
+    waiting.dataset.wizardStatusFor = String(device.id);
+
+    const note = el("p", "note", "Tryb konfiguracji trwa ok. 3 minuty. Jeśli nie zdążysz, "
+        + "odłącz zasilanie i zacznij od kroku 2.");
+
+    // Kod QR: telefon po kroku 3 skanuje ekran komputera, token wpisuje się sam
+    const qrPanel = el("div", "qr-panel");
+    const qrBtn = el("button", "link-btn", openQr.has(device.id) ? "Ukryj kod QR" : "Pokaż kod QR");
+    const qrBox = el("div");
+
+    qrBtn.type = "button";
+    qrPanel.append(
+        el("p", "muted small", "Masz portal otwarty na komputerze? Po kroku 3 zeskanuj telefonem kod QR – "
+            + "otworzy stronę urządzenia z już wpisanym tokenem."),
+        qrBtn,
+        qrBox
+    );
+
+    if (openQr.has(device.id)) {
+        renderQr(qrBox, device.token);
+    }
+
+    qrBtn.addEventListener("click", () => {
+        if (openQr.has(device.id)) {
+            openQr.delete(device.id);
+            qrBox.replaceChildren();
+            qrBtn.textContent = "Pokaż kod QR";
+            return;
+        }
+
+        openQr.add(device.id);
+        renderQr(qrBox, device.token);
+        qrBtn.textContent = "Ukryj kod QR";
+    });
+
+    box.append(steps, waiting, note, qrPanel);
+
+    return box;
+}
+
+
+function parsePrice(text) {
+    const value = String(text).trim().replace(",", ".");
+
+    if (value === "") {
+        return null;
+    }
+
+    const n = Number(value);
+
+    return isFinite(n) && n >= 0 && n <= 100 ? n : NaN;
+}
+
+
+function buildEditor(device) {
+    const form = el("form", "editor");
+    const nameId = `edit-name-${device.id}`;
+    const priceId = `edit-price-${device.id}`;
+
+    const nameLabel = el("label", "control-label", "Nazwa");
+    const nameInput = el("input", "text-input");
+
+    nameLabel.htmlFor = nameId;
+    nameInput.id = nameId;
+    nameInput.maxLength = 40;
+    nameInput.value = device.name;
+    nameInput.autocomplete = "off";
+
+    form.append(nameLabel, nameInput);
+
+    let priceInput = null;
+
+    if (device.device_type === "prad") {
+        const priceLabel = el("label", "control-label", "Cena 1 kWh (zł, razem z opłatami)");
+
+        priceInput = el("input", "text-input");
+        priceLabel.htmlFor = priceId;
+        priceInput.id = priceId;
+        priceInput.inputMode = "decimal";
+        priceInput.placeholder = "np. 1,10";
+        priceInput.autocomplete = "off";
+        priceInput.value = isNumber(device.price_per_kwh) ? String(device.price_per_kwh).replace(".", ",") : "";
+
+        form.append(
+            priceLabel,
+            priceInput,
+            el("p", "muted small", "Służy do szacowania kosztów. Zostaw puste, aby ją usunąć.")
+        );
+    }
+
+    const error = el("p", "error-text");
+    const save = el("button", "btn btn-primary", "Zapisz");
+
+    error.hidden = true;
+    save.type = "submit";
+    form.append(error, save);
+
+    form.addEventListener("submit", async event => {
+        event.preventDefault();
+        error.hidden = true;
+
+        const body = { name: nameInput.value.trim() };
+
+        if (!body.name) {
+            error.textContent = "Podaj nazwę urządzenia";
+            error.hidden = false;
+            return;
+        }
+
+        if (priceInput) {
+            const price = parsePrice(priceInput.value);
+
+            if (Number.isNaN(price)) {
+                error.textContent = "Cena musi być liczbą od 0 do 100 zł";
+                error.hidden = false;
                 return;
             }
 
-            openQr.add(device.id);
-            renderQr(qrBox, device.token);
-            qrBox.hidden = false;
-        });
+            body.price_per_kwh = price;
+        }
 
-        delBtn.addEventListener("click", () => removeDevice(device));
+        save.disabled = true;
 
-        panel.append(head, token, actions, qrBox);
-        list.append(panel);
-    }
+        try {
+            await api(`/api/devices/${device.id}`, { method: "PATCH", body: JSON.stringify(body) });
+            openPanels.delete(device.id);
+            listSignature = "";
+            toast("Zapisano");
+            await refreshDevices();
+            loadCharts();
+
+        } catch (saveError) {
+            error.textContent = saveError.message;
+            error.hidden = false;
+            save.disabled = false;
+        }
+    });
+
+    return form;
 }
 
 
@@ -389,12 +775,13 @@ function renderQr(box, token) {
 
     const qr = qrcode(0, "M");
 
-    qr.addData(token);
+    // Strona konfiguracyjna urządzenia przyjmuje ?token=... i sama wpisuje token
+    qr.addData(`http://${SETUP_ADDRESS}/?token=${encodeURIComponent(token)}`);
     qr.make();
 
     const img = el("img", "qr");
 
-    img.alt = "Kod QR z tokenem urządzenia";
+    img.alt = "Kod QR otwierający konfigurację urządzenia z tokenem";
     img.src = qr.createDataURL(6, 4);
     box.append(img);
 }
@@ -404,7 +791,8 @@ async function addDevice(event) {
     event.preventDefault();
 
     const name = $("device-name").value.trim();
-    const deviceType = $("device-type").value;
+    const checked = document.querySelector('input[name="device-type"]:checked');
+    const deviceType = checked ? checked.value : "";
 
     $("device-error").hidden = true;
 
@@ -421,9 +809,15 @@ async function addDevice(event) {
         });
 
         $("device-name").value = "";
-        openQr.add(device.id);
-        toast("Urządzenie dodane");
+        openPanels.set(device.id, "wizard");
+        toast("Urządzenie dodane – teraz je podłącz");
         await refreshDevices();
+
+        const card = document.querySelector(`[data-device-card="${device.id}"]`);
+
+        if (card) {
+            card.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
 
     } catch (error) {
         $("device-error").textContent = error.message;
@@ -439,7 +833,9 @@ async function removeDevice(device) {
 
     try {
         await api(`/api/devices/${device.id}`, { method: "DELETE" });
+        openPanels.delete(device.id);
         openQr.delete(device.id);
+        summaries.delete(device.id);
         toast("Urządzenie usunięte");
         await refreshDevices();
 
@@ -471,7 +867,8 @@ function renderMeasurements() {
         return;
     }
 
-    setOnlineBadge($("device-status"), device.online);
+    setStatus($("device-status"), device);
+    $("not-connected").hidden = Boolean(device.online || device.last_seen);
 
     const isWater = device.device_type === "woda";
 
@@ -487,6 +884,7 @@ function renderMeasurements() {
             $(id).textContent = fmt(latest[metric], digits);
         }
 
+        renderWaterSummary(device);
         return;
     }
 
@@ -494,9 +892,18 @@ function renderMeasurements() {
         $(id).textContent = fmt(latest[metric], digits);
     }
 
-    // Koszt doby tylko wtedy, gdy urządzenie go publikuje (cena podana w urządzeniu)
-    $("m-cost-card").hidden = latest.cost_last_24h === undefined;
-    $("m-cost").textContent = fmt(latest.cost_last_24h, 2);
+    const price = isNumber(device.price_per_kwh) ? Number(device.price_per_kwh) : null;
+
+    // 24 h liczy samo urządzenie; koszt z ceny z portalu, a bez niej – z urządzenia (jeśli ją zna)
+    $("m-24h").textContent = fmt(latest.kwh_last_24h, 2);
+    $("m-24h-sub").textContent = price !== null && isNumber(latest.kwh_last_24h)
+        ? money(Number(latest.kwh_last_24h) * price)
+        : money(latest.cost_last_24h);
+
+    $("price-text").textContent = price !== null
+        ? `Cena prądu: ${fmt(price, 2)} zł/kWh`
+        : "Ustaw cenę prądu, aby widzieć koszty";
+    $("price-btn").textContent = price !== null ? "Zmień" : "Ustaw";
 
     const historyHours = Number(latest.history_hours);
 
@@ -508,6 +915,66 @@ function renderMeasurements() {
 
     $("d-pulses-row").hidden = latest.pulses === undefined;
     $("d-pulses").textContent = fmt(latest.pulses, 0);
+
+    renderEnergySummary(device);
+}
+
+
+function renderEnergySummary(device) {
+    const summary = summaries.get(device.id);
+    const price = isNumber(device.price_per_kwh) ? Number(device.price_per_kwh) : null;
+    const cost = kwh => (price !== null && isNumber(kwh) ? money(Number(kwh) * price) : "");
+
+    if (!summary || summary.device_type !== "prad") {
+        ["m-today", "m-yesterday", "m-month", "m-base", "m-peak"].forEach(id => { $(id).textContent = "--"; });
+        ["m-today-sub", "m-yesterday-sub", "m-month-sub", "m-peak-sub"].forEach(id => { $(id).textContent = ""; });
+        return;
+    }
+
+    $("m-today").textContent = fmt(summary.today_kwh, 2);
+    $("m-today-sub").textContent = cost(summary.today_kwh);
+
+    $("m-yesterday").textContent = fmt(summary.yesterday_kwh, 2);
+    $("m-yesterday-sub").textContent = cost(summary.yesterday_kwh);
+
+    $("m-month").textContent = fmt(summary.month_forecast_kwh, 0);
+    $("m-month-sub").textContent = isNumber(summary.month_forecast_kwh)
+        ? cost(summary.month_forecast_kwh) || `średnio ${fmt(summary.avg_daily_kwh, 2)} kWh/dzień`
+        : "potrzeba 1 pełnej doby danych";
+
+    $("m-base").textContent = fmt(summary.base_load_w, 0);
+    $("m-base-sub").textContent = isNumber(summary.base_load_w)
+        ? "najspokojniejsza godzina doby"
+        : "potrzeba kilku godzin danych";
+
+    $("m-peak").textContent = fmt(summary.power_max_24h, 0);
+    $("m-peak-sub").textContent = isNumber(summary.power_avg_24h)
+        ? `średnio ${fmt(summary.power_avg_24h, 0)} W`
+        : "";
+}
+
+
+function renderWaterSummary(device) {
+    const summary = summaries.get(device.id);
+    const valid = summary && summary.device_type === "woda";
+
+    $("m-tmin").textContent = valid ? fmt(summary.min, 1) : "--";
+    $("m-tavg").textContent = valid ? fmt(summary.avg, 1) : "--";
+    $("m-tmax").textContent = valid ? fmt(summary.max, 1) : "--";
+
+    const trendNode = $("m-trend");
+    const trend = valid ? summary.trend_per_hour : null;
+
+    trendNode.classList.remove("up", "down");
+
+    if (!isNumber(trend)) {
+        trendNode.textContent = "--";
+    } else if (Math.abs(trend) < 0.3) {
+        trendNode.textContent = "→ stała";
+    } else {
+        trendNode.textContent = `${trend > 0 ? "↑" : "↓"} ${fmt(Math.abs(trend), 1)} °C/h`;
+        trendNode.classList.add(trend > 0 ? "up" : "down");
+    }
 }
 
 
@@ -600,6 +1067,50 @@ function initCharts() {
         }
     });
 
+    charts.daily = new Chart($("chart-daily"), {
+        type: "bar",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "kWh",
+                data: [],
+                backgroundColor: [],
+                borderRadius: 6,
+                maxBarThickness: 42
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: item => {
+                            const day = dailyInfo.days[item.dataIndex];
+                            let text = ` ${fmt(item.parsed.y, 2)} kWh`;
+
+                            if (dailyInfo.price !== null) {
+                                text += ` · ${money(item.parsed.y * dailyInfo.price)}`;
+                            }
+
+                            if (day && !day.complete) {
+                                text += " (niepełna doba)";
+                            }
+
+                            return text;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { ...ticks, maxRotation: 0 }, grid: { display: false } },
+                y: { beginAtZero: true, ticks, grid: { color: grid } }
+            }
+        }
+    });
+
     charts.temperature = new Chart($("chart-temperature"), {
         type: "line",
         data: {
@@ -647,6 +1158,35 @@ function setEmpty(chart, empty) {
 }
 
 
+// Dane do podpowiedzi wykresu dziennego (pełna doba / koszt)
+const dailyInfo = { days: [], price: null };
+
+function updateDailyChart(summary, device) {
+    if (!charts.daily) {
+        return;
+    }
+
+    const days = summary.days || [];
+
+    dailyInfo.days = days;
+    dailyInfo.price = isNumber(device.price_per_kwh) ? Number(device.price_per_kwh) : null;
+
+    charts.daily.data.labels = days.map((day, index) => {
+        if (index === days.length - 1) {
+            return "dziś";
+        }
+
+        const [y, m, d] = day.date.split("-").map(Number);
+
+        return new Date(y, m - 1, d).toLocaleDateString("pl-PL", { weekday: "short", day: "numeric" });
+    });
+    charts.daily.data.datasets[0].data = days.map(day => day.kwh);
+    charts.daily.data.datasets[0].backgroundColor = days.map(day => (day.complete ? "#818cf8" : "#818cf866"));
+    charts.daily.update();
+    setEmpty(charts.daily, !days.some(day => day.kwh !== null));
+}
+
+
 async function loadCharts() {
     if (selectedId === null || $("measure-view").hidden) {
         return;
@@ -675,14 +1215,21 @@ async function loadPowerCharts(device) {
     const hours = rangeHours.prad;
 
     try {
-        const [power, hourlyData] = await Promise.all([
+        const [power, hourlyData, summary] = await Promise.all([
             api(`/api/devices/${id}/history?metric=power_w&hours=${hours}`),
-            api(`/api/devices/${id}/hourly?hours=${hours}`)
+            api(`/api/devices/${id}/hourly?hours=${hours}`),
+            api(`/api/devices/${id}/summary`)
         ]);
 
         if (id !== selectedId) {
             return;
         }
+
+        const current = currentDevice() || device;
+
+        summaries.set(id, summary);
+        renderEnergySummary(current);
+        updateDailyChart(summary, current);
 
         const now = Date.now();
         const points = power.data
@@ -729,11 +1276,17 @@ async function loadWaterChart(device) {
     const hours = rangeHours.woda;
 
     try {
-        const temp = await api(`/api/devices/${id}/history?metric=temperatura&hours=${hours}`);
+        const [temp, summary] = await Promise.all([
+            api(`/api/devices/${id}/history?metric=temperatura&hours=${hours}`),
+            api(`/api/devices/${id}/summary?hours=${hours}`)
+        ]);
 
         if (id !== selectedId) {
             return;
         }
+
+        summaries.set(id, summary);
+        renderWaterSummary(currentDevice() || device);
 
         const now = Date.now();
         const points = temp.data
@@ -802,6 +1355,23 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("auth-form").addEventListener("submit", submitAuth);
     $("device-form").addEventListener("submit", addDevice);
     $("logout-btn").addEventListener("click", logout);
+
+    $("start-add-btn").addEventListener("click", () => {
+        setView("devices");
+        $("device-name").focus();
+    });
+
+    $("not-connected-btn").addEventListener("click", () => {
+        if (selectedId !== null) {
+            openDevicePanel(selectedId, "wizard");
+        }
+    });
+
+    $("price-btn").addEventListener("click", () => {
+        if (selectedId !== null) {
+            openDevicePanel(selectedId, "edit");
+        }
+    });
 
     setAuthMode("login");
 

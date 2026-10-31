@@ -1,9 +1,10 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
@@ -25,7 +26,7 @@ from portal.security import (
     normalize_email,
     verify_password,
 )
-from portal.stats import downsample, hourly_consumption
+from portal.stats import daily_consumption, downsample, hourly_consumption, temperature_trend
 
 
 load_dotenv()
@@ -37,6 +38,14 @@ COOKIE_NAME = "portal_session"
 CSRF_HEADER_VALUE = "warcgr-portal"
 
 MAX_DEVICES_PER_USER = 10
+
+# Granice dni w podsumowaniach licznika liczymy w czasie polskim
+try:
+    LOCAL_TZ = ZoneInfo("Europe/Warsaw")
+except ZoneInfoNotFoundError:
+    LOCAL_TZ = timezone.utc
+
+SUMMARY_DAYS = 7
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
@@ -65,6 +74,7 @@ async def lifespan(app: FastAPI):
     await db.cleanup()
 
     ingest.set_known_tokens(await db.load_all_tokens())
+    ingest.last_seen.update(await db.load_last_seen())
     ingest.start_mqtt_thread(asyncio.get_running_loop())
 
     task = asyncio.create_task(cleanup_loop())
@@ -176,6 +186,7 @@ def device_view(device: dict) -> dict:
     return {
         **device,
         "online": ingest.is_online(token),
+        "last_seen": ingest.last_seen.get(token),
         "latest": ingest.latest.get(token, {}),
         "type_label": type_config.get("label", device["device_type"]),
     }
@@ -267,6 +278,12 @@ class DeviceCreate(BaseModel):
     device_type: str = Field(max_length=20)
 
 
+class DeviceUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=40)
+    # null = usuń cenę
+    price_per_kwh: Optional[float] = Field(default=None, ge=0, le=100)
+
+
 @app.get("/api/devices")
 async def list_devices(user: dict = Depends(current_user)):
     devices = await db.list_devices(user["id"])
@@ -317,6 +334,31 @@ async def owned_device(device_id: int, user: dict) -> dict:
     return device
 
 
+@app.patch("/api/devices/{device_id}", dependencies=[Depends(require_csrf)])
+async def update_device(device_id: int, body: DeviceUpdate, user: dict = Depends(current_user)):
+    await owned_device(device_id, user)
+
+    changes = {}
+
+    if "name" in body.model_fields_set:
+        name = (body.name or "").strip()
+
+        if not name:
+            raise HTTPException(status_code=400, detail="Podaj nazwę urządzenia")
+
+        changes["name"] = name
+
+    if "price_per_kwh" in body.model_fields_set:
+        changes["price_per_kwh"] = body.price_per_kwh
+
+    device = await db.update_device(user["id"], device_id, changes)
+
+    if device is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono urządzenia")
+
+    return device_view(device)
+
+
 @app.get("/api/devices/{device_id}/history")
 async def history(
     device_id: int,
@@ -364,3 +406,77 @@ async def hourly(
     rows = await db.get_readings(device_id, hourly_metric, since)
 
     return {"hours": hours, "data": hourly_consumption(rows, hours)}
+
+
+def _rounded(value, digits: int):
+    return round(value, digits) if value is not None else None
+
+
+async def energy_summary(device: dict, now: datetime) -> dict:
+    today = now.astimezone(LOCAL_TZ).date()
+    first_day = today - timedelta(days=SUMMARY_DAYS - 1)
+    # Godzina zapasu: potrzebny ostatni odczyt sprzed północy pierwszego dnia
+    since = datetime.combine(first_day, time(0), tzinfo=LOCAL_TZ) - timedelta(hours=1)
+
+    rows = await db.get_hourly_last(device["id"], "kwh", since)
+    days = daily_consumption(rows, LOCAL_TZ, SUMMARY_DAYS, now)
+
+    full_days = [d["kwh"] for d in days if d["complete"]]
+    avg_daily = sum(full_days) / len(full_days) if full_days else None
+
+    # Pobór w tle: średni pobór w najspokojniejszej godzinie ostatniej doby
+    recent = [r for r in rows if datetime.fromisoformat(r["timestamp"]) >= now - timedelta(hours=26)]
+    hourly = hourly_consumption(recent, 24)
+    base_load_w = min(h["kwh"] for h in hourly) * 1000 if len(hourly) >= 6 else None
+
+    power = await db.get_stats(device["id"], "power_w", now - timedelta(hours=24))
+
+    return {
+        "device_type": "prad",
+        "days": days,
+        "today_kwh": days[-1]["kwh"],
+        "yesterday_kwh": days[-2]["kwh"],
+        "avg_daily_kwh": _rounded(avg_daily, 3),
+        "month_forecast_kwh": _rounded(avg_daily * 30 if avg_daily is not None else None, 1),
+        "base_load_w": _rounded(base_load_w, 0),
+        "power_max_24h": _rounded(power["max"], 0),
+        "power_avg_24h": _rounded(power["avg"], 0),
+        "price_per_kwh": device.get("price_per_kwh"),
+    }
+
+
+async def water_summary(device: dict, now: datetime, hours: int) -> dict:
+    stats = await db.get_stats(device["id"], "temperatura", now - timedelta(hours=hours))
+    recent = await db.get_readings(device["id"], "temperatura", now - timedelta(minutes=30))
+
+    return {
+        "device_type": "woda",
+        "hours": hours,
+        "min": _rounded(stats["min"], 1),
+        "avg": _rounded(stats["avg"], 1),
+        "max": _rounded(stats["max"], 1),
+        "count": stats["count"],
+        "trend_per_hour": temperature_trend(recent, now),
+    }
+
+
+@app.get("/api/devices/{device_id}/summary")
+async def summary(
+    device_id: int,
+    hours: int = 24,
+    user: dict = Depends(current_user),
+):
+    device = await owned_device(device_id, user)
+
+    if hours < 1 or hours > 168:
+        raise HTTPException(status_code=400, detail="hours must be between 1 and 168")
+
+    now = datetime.now(timezone.utc)
+
+    if device["device_type"] == "prad":
+        return await energy_summary(device, now)
+
+    if device["device_type"] == "woda":
+        return await water_summary(device, now, hours)
+
+    raise HTTPException(status_code=400, detail="Niedostępne dla tego typu czujnika")

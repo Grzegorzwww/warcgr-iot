@@ -16,9 +16,14 @@
 <body>
 
 <header class="header">
-    <div>
-        <h1>Warcgr</h1>
-        <p>Monitoring czujników domowych</p>
+    <div class="brand">
+        <span class="brand-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/><path d="m12.8 11-2.3 3.5h3l-2.3 3.5"/></svg>
+        </span>
+        <div>
+            <h1>Warcgr</h1>
+            <p>Twój dom pod kontrolą</p>
+        </div>
     </div>
 
     <div id="user-box" class="user-box" hidden>
@@ -31,6 +36,11 @@
 
     <!-- ===== LOGOWANIE / REJESTRACJA ===== -->
     <section id="auth-view" hidden>
+        <div class="hero">
+            <h2>Zużycie prądu i temperatura wody – w jednym miejscu</h2>
+            <p class="muted">Podłącz czujnik do domowego Wi-Fi i śledź pomiary na żywo z telefonu.</p>
+        </div>
+
         <div class="panel">
             <div class="segmented" id="auth-mode">
                 <button type="button" data-mode="login" class="active">Logowanie</button>
@@ -65,57 +75,100 @@
         <!-- Pomiary -->
         <div id="measure-view">
 
-            <div id="no-devices" class="panel" hidden>
-                <h2>Brak urządzeń</h2>
+            <div id="no-devices" class="panel empty-state" hidden>
+                <span class="empty-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4"/></svg>
+                </span>
+                <h2>Podłącz pierwsze urządzenie</h2>
                 <p class="muted">
-                    Dodaj pierwsze urządzenie w zakładce „Urządzenia”, aby zobaczyć pomiary.
+                    Dodaj czujnik w portalu, skopiuj jego token i wpisz go w urządzeniu.
+                    Przeprowadzimy Cię przez to krok po kroku.
                 </p>
+                <button type="button" id="start-add-btn" class="btn btn-primary">Dodaj urządzenie</button>
             </div>
 
             <div id="measure-content" hidden>
 
-                <div class="row-between">
-                    <select id="device-select" class="text-input select-input" aria-label="Urządzenie"></select>
-                    <span id="device-status" class="badge">--</span>
+                <div class="device-bar">
+                    <div class="device-bar-name">
+                        <h2 id="device-title" hidden></h2>
+                        <select id="device-select" class="text-input select-input" aria-label="Urządzenie"></select>
+                    </div>
+                    <span id="device-status" class="status"><span class="dot"></span><span class="status-text">--</span></span>
+                </div>
+
+                <div id="not-connected" class="callout" hidden>
+                    <div>
+                        <strong>Urządzenie nie przesłało jeszcze danych</strong>
+                        <p class="muted small">Wpisz w nim token z portalu – pokażemy jak.</p>
+                    </div>
+                    <button type="button" id="not-connected-btn" class="btn btn-primary btn-small">Jak podłączyć?</button>
                 </div>
 
                 <!-- Zużycie prądu -->
                 <div id="measure-prad">
-                    <div class="cards">
-                        <div class="card">
-                            <div class="card-label">Moc chwilowa</div>
-                            <div class="card-value"><span id="m-power">--</span><span class="unit">W</span></div>
+                    <div class="hero-card energy">
+                        <div>
+                            <div class="card-label">Moc teraz</div>
+                            <div class="hero-value"><span id="m-power">--</span><span class="unit">W</span></div>
                         </div>
-
-                        <div class="card">
+                        <div class="hero-side">
                             <div class="card-label">Stan licznika</div>
-                            <div class="card-value"><span id="m-kwh">--</span><span class="unit">kWh</span></div>
-                        </div>
-
-                        <div class="card compact">
-                            <div class="card-label">Zużycie – 1h</div>
-                            <div class="card-value"><span id="m-1h">--</span><span class="unit">kWh</span></div>
-                        </div>
-
-                        <div class="card compact">
-                            <div class="card-label">Zużycie – 3h</div>
-                            <div class="card-value"><span id="m-3h">--</span><span class="unit">kWh</span></div>
-                        </div>
-
-                        <div class="card compact">
-                            <div class="card-label">Zużycie – 24h</div>
-                            <div class="card-value"><span id="m-24h">--</span><span class="unit">kWh</span></div>
-                        </div>
-
-                        <div class="card compact" id="m-cost-card" hidden>
-                            <div class="card-label">Koszt – 24h</div>
-                            <div class="card-value"><span id="m-cost">--</span><span class="unit">zł</span></div>
+                            <div class="hero-side-value"><span id="m-kwh">--</span><span class="unit">kWh</span></div>
                         </div>
                     </div>
 
+                    <div class="cards">
+                        <div class="card">
+                            <div class="card-label">Dziś</div>
+                            <div class="card-value"><span id="m-today">--</span><span class="unit">kWh</span></div>
+                            <div class="card-sub" id="m-today-sub"></div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-label">Wczoraj</div>
+                            <div class="card-value"><span id="m-yesterday">--</span><span class="unit">kWh</span></div>
+                            <div class="card-sub" id="m-yesterday-sub"></div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-label">Ostatnie 24 h</div>
+                            <div class="card-value"><span id="m-24h">--</span><span class="unit">kWh</span></div>
+                            <div class="card-sub" id="m-24h-sub"></div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-label">Prognoza na miesiąc</div>
+                            <div class="card-value"><span id="m-month">--</span><span class="unit">kWh</span></div>
+                            <div class="card-sub" id="m-month-sub"></div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-label">Pobór w tle</div>
+                            <div class="card-value"><span id="m-base">--</span><span class="unit">W</span></div>
+                            <div class="card-sub" id="m-base-sub">najspokojniejsza godzina doby</div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-label">Szczyt mocy – 24 h</div>
+                            <div class="card-value"><span id="m-peak">--</span><span class="unit">W</span></div>
+                            <div class="card-sub" id="m-peak-sub"></div>
+                        </div>
+                    </div>
+
+                    <div class="price-row">
+                        <span id="price-text" class="muted small">--</span>
+                        <button type="button" id="price-btn" class="link-btn">Ustaw</button>
+                    </div>
+
                     <p class="note" id="history-warning" hidden>
-                        Urządzenie ma historię krótszą niż 24h – wartości zużycia z okien czasowych są zaniżone.
+                        Urządzenie działa krócej niż 24 h – część wartości jest jeszcze zaniżona.
                     </p>
+
+                    <div class="panel">
+                        <h3>Zużycie dzienne – 7 dni</h3>
+                        <div class="chart-box"><canvas id="chart-daily"></canvas></div>
+                    </div>
 
                     <div class="segmented small" id="range-buttons">
                         <button type="button" data-hours="6">6h</button>
@@ -134,21 +187,40 @@
                         <div class="chart-box"><canvas id="chart-hourly"></canvas></div>
                     </div>
 
-                    <div class="panel">
-                        <h3>Diagnostyka czujnika</h3>
+                    <details class="panel details">
+                        <summary>Diagnostyka czujnika</summary>
                         <div class="row"><span class="card-label">Szerokość impulsu</span><span id="d-width" class="badge">--</span></div>
                         <div class="row"><span class="card-label">Odrzucone błyski</span><span id="d-rejected" class="badge">--</span></div>
                         <div class="row"><span class="card-label">Okno historii</span><span id="d-history" class="badge">--</span></div>
                         <div class="row" id="d-pulses-row" hidden><span class="card-label">Impulsy</span><span id="d-pulses" class="badge">--</span></div>
-                    </div>
+                    </details>
                 </div>
 
                 <!-- Temperatura wody -->
                 <div id="measure-woda" hidden>
-                    <div class="cards">
-                        <div class="card">
+                    <div class="hero-card water">
+                        <div>
                             <div class="card-label">Temperatura wody</div>
-                            <div class="card-value"><span id="m-temp">--</span><span class="unit">°C</span></div>
+                            <div class="hero-value"><span id="m-temp">--</span><span class="unit">°C</span></div>
+                        </div>
+                        <div class="hero-side">
+                            <div class="card-label">Trend</div>
+                            <div class="hero-side-value" id="m-trend">--</div>
+                        </div>
+                    </div>
+
+                    <div class="cards three">
+                        <div class="card">
+                            <div class="card-label">Minimum</div>
+                            <div class="card-value"><span id="m-tmin">--</span><span class="unit">°C</span></div>
+                        </div>
+                        <div class="card">
+                            <div class="card-label">Średnio</div>
+                            <div class="card-value"><span id="m-tavg">--</span><span class="unit">°C</span></div>
+                        </div>
+                        <div class="card">
+                            <div class="card-label">Maksimum</div>
+                            <div class="card-value"><span id="m-tmax">--</span><span class="unit">°C</span></div>
                         </div>
                     </div>
 
@@ -170,31 +242,42 @@
         <!-- Urządzenia -->
         <div id="devices-view" hidden>
 
+            <div id="device-list"></div>
+
             <div class="panel">
                 <h2>Dodaj urządzenie</h2>
                 <form id="device-form" novalidate>
+                    <span class="control-label">Co mierzy urządzenie?</span>
+                    <div class="type-picker" role="radiogroup" aria-label="Typ czujnika">
+                        <label class="type-option energy">
+                            <input type="radio" name="device-type" value="prad" checked>
+                            <span class="type-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+                            </span>
+                            <span>Zużycie prądu</span>
+                        </label>
+                        <label class="type-option water">
+                            <input type="radio" name="device-type" value="woda">
+                            <span class="type-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="M12 2.5S6 9.1 6 13.5a6 6 0 0 0 12 0c0-4.4-6-11-6-11z"/></svg>
+                            </span>
+                            <span>Temperatura wody</span>
+                        </label>
+                    </div>
+
                     <label class="control-label" for="device-name">Nazwa</label>
                     <input id="device-name" class="text-input" type="text" maxlength="40"
                            placeholder="np. Licznik w garażu" autocomplete="off">
 
-                    <label class="control-label" for="device-type">Typ czujnika</label>
-                    <select id="device-type" class="text-input">
-                        <option value="prad">Zużycie prądu</option>
-                        <option value="woda">Temperatura wody</option>
-                    </select>
-
                     <p class="error-text" id="device-error" hidden></p>
-                    <button type="submit" class="btn btn-primary">Dodaj</button>
+                    <button type="submit" class="btn btn-primary">Dodaj i podłącz</button>
                 </form>
             </div>
 
-            <div id="device-list"></div>
-
-            <div class="panel">
-                <h3>Jak podłączyć urządzenie</h3>
+            <details class="panel details">
+                <summary>Dla zaawansowanych (MQTT)</summary>
                 <p class="muted small">
-                    Wpisz token urządzenia (lub zeskanuj kod QR) w konfiguracji ESP.
-                    Urządzenie publikuje na brokerze MQTT pod topicami zależnymi od wybranego typu czujnika:
+                    Urządzenie publikuje na brokerze MQTT pod topicami zależnymi od typu czujnika:
                 </p>
                 <p><strong>Zużycie prądu:</strong><br>
                    <code>TOKEN/zurzycie_pradu/kwh</code><br>
@@ -203,7 +286,7 @@
                 <p><strong>Temperatura wody:</strong><br>
                    <code>TOKEN/temperatura_wody</code></p>
                 <p class="muted small">Token jest tajny – kto go zna, może wysyłać dane w imieniu urządzenia.</p>
-            </div>
+            </details>
         </div>
 
     </section>

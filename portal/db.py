@@ -73,6 +73,8 @@ async def init_db():
         # Migracja: baza założona przed wprowadzeniem typów czujników nie ma
         # jeszcze tej kolumny – dogrywamy ją, żeby nie zepsuć istniejących danych.
         await _ensure_column(db, "devices", "device_type", f"TEXT NOT NULL DEFAULT '{DEFAULT_DEVICE_TYPE}'")
+        # Cena za kWh ustawiana przez użytkownika (NULL = nie podano)
+        await _ensure_column(db, "devices", "price_per_kwh", "REAL")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS readings (
@@ -167,11 +169,25 @@ async def delete_session(token_hash: str):
 
 # ---------- Urządzenia ----------
 
+_DEVICE_COLUMNS = "id, name, token, device_type, created_at, price_per_kwh"
+
+
+def _device_row(row) -> dict:
+    return {
+        "id": row[0],
+        "name": row[1],
+        "token": row[2],
+        "device_type": row[3],
+        "created_at": row[4],
+        "price_per_kwh": row[5],
+    }
+
+
 async def list_devices(user_id: int):
     async with _db() as db:
         cursor = await db.execute(
-            """
-            SELECT id, name, token, device_type, created_at
+            f"""
+            SELECT {_DEVICE_COLUMNS}
             FROM devices
             WHERE user_id = ?
             ORDER BY id
@@ -181,17 +197,14 @@ async def list_devices(user_id: int):
         rows = await cursor.fetchall()
         await cursor.close()
 
-    return [
-        {"id": r[0], "name": r[1], "token": r[2], "device_type": r[3], "created_at": r[4]}
-        for r in rows
-    ]
+    return [_device_row(r) for r in rows]
 
 
 async def get_device(user_id: int, device_id: int):
     async with _db() as db:
         cursor = await db.execute(
-            """
-            SELECT id, name, token, device_type, created_at
+            f"""
+            SELECT {_DEVICE_COLUMNS}
             FROM devices
             WHERE id = ? AND user_id = ?
             """,
@@ -203,13 +216,25 @@ async def get_device(user_id: int, device_id: int):
     if row is None:
         return None
 
-    return {
-        "id": row[0],
-        "name": row[1],
-        "token": row[2],
-        "device_type": row[3],
-        "created_at": row[4],
-    }
+    return _device_row(row)
+
+
+async def update_device(user_id: int, device_id: int, changes: dict):
+    """Zmienia nazwę i/lub cenę. Zwraca zaktualizowane urządzenie albo None."""
+    allowed = {"name", "price_per_kwh"}
+    fields = [key for key in changes if key in allowed]
+
+    if fields:
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+
+        async with _db() as db:
+            await db.execute(
+                f"UPDATE devices SET {assignments} WHERE id = ? AND user_id = ?",
+                (*[changes[key] for key in fields], device_id, user_id),
+            )
+            await db.commit()
+
+    return await get_device(user_id, device_id)
 
 
 async def count_devices(user_id: int) -> int:
@@ -242,6 +267,7 @@ async def create_device(user_id: int, name: str, token: str, device_type: str):
         "token": token,
         "device_type": device_type,
         "created_at": created_at,
+        "price_per_kwh": None,
     }
 
 
@@ -274,6 +300,25 @@ async def load_all_tokens():
     }
 
 
+async def load_last_seen():
+    """token -> czas ostatniego zapisanego odczytu (epoch s); odtwarza stan po restarcie."""
+    async with _db() as db:
+        cursor = await db.execute(
+            """
+            SELECT token, (SELECT MAX(timestamp) FROM readings WHERE device_id = devices.id)
+            FROM devices
+            """
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+    return {
+        token: datetime.fromisoformat(ts).timestamp()
+        for token, ts in rows
+        if ts is not None
+    }
+
+
 # ---------- Pomiary ----------
 
 async def save_reading(device_id: int, metric: str, value: float):
@@ -302,6 +347,46 @@ async def get_readings(device_id: int, metric: str, since: datetime):
         await cursor.close()
 
     return [{"timestamp": ts, "value": value} for ts, value in rows]
+
+
+async def get_hourly_last(device_id: int, metric: str, since: datetime):
+    """Ostatni odczyt z każdej godziny (UTC) – wystarcza do liczenia zużycia z licznika."""
+    async with _db() as db:
+        # SQLite: przy MAX() pozostałe kolumny pochodzą z wiersza z maksimum
+        cursor = await db.execute(
+            """
+            SELECT MAX(timestamp), value
+            FROM readings
+            WHERE device_id = ?
+              AND metric = ?
+              AND timestamp >= ?
+            GROUP BY substr(timestamp, 1, 13)
+            ORDER BY 1
+            """,
+            (device_id, metric, since.isoformat()),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+    return [{"timestamp": ts, "value": value} for ts, value in rows]
+
+
+async def get_stats(device_id: int, metric: str, since: datetime):
+    async with _db() as db:
+        cursor = await db.execute(
+            """
+            SELECT COUNT(*), MIN(value), AVG(value), MAX(value)
+            FROM readings
+            WHERE device_id = ?
+              AND metric = ?
+              AND timestamp >= ?
+            """,
+            (device_id, metric, since.isoformat()),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+
+    return {"count": row[0], "min": row[1], "avg": row[2], "max": row[3]}
 
 
 async def cleanup():

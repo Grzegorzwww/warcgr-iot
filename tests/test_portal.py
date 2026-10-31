@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from portal import db, ingest
 from portal.main import DeviceCreate
@@ -15,7 +16,7 @@ from portal.security import (
     normalize_email,
     verify_password,
 )
-from portal.stats import downsample, hourly_consumption
+from portal.stats import daily_consumption, downsample, hourly_consumption, temperature_trend
 
 
 class SecurityTests(unittest.TestCase):
@@ -180,6 +181,54 @@ class StatsTests(unittest.TestCase):
         self.assertLessEqual(len(downsample(data, 100)), 100)
         self.assertEqual(downsample(data[:5], 100), data[:5])
 
+    def test_daily_consumption_sums_per_local_day(self):
+        tz = ZoneInfo("Europe/Warsaw")
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        rows = [
+            # 14.10 23:30 czasu polskiego (21:30 UTC) – odczyt bazowy
+            {"timestamp": "2026-10-14T21:30:00+00:00", "value": 100.0},
+            # 15.10 00:30 czasu polskiego – już 15.10
+            {"timestamp": "2026-10-14T22:30:00+00:00", "value": 100.5},
+            {"timestamp": "2026-10-15T20:00:00+00:00", "value": 104.0},
+            # przerwa w danych – energia nie może zginąć
+            {"timestamp": "2026-10-16T06:00:00+00:00", "value": 105.0},
+            # ręczna zmiana stanu licznika – pomijana
+            {"timestamp": "2026-10-16T07:00:00+00:00", "value": 9000.0},
+            {"timestamp": "2026-10-16T08:00:00+00:00", "value": 9000.4},
+        ]
+
+        days = daily_consumption(rows, tz, 3, now)
+
+        self.assertEqual([d["date"] for d in days], ["2026-10-14", "2026-10-15", "2026-10-16"])
+        self.assertIsNone(days[0]["kwh"])
+        self.assertEqual(days[1]["kwh"], 4.0)
+        self.assertEqual(days[2]["kwh"], 1.4)
+        self.assertTrue(days[1]["complete"])
+        self.assertFalse(days[2]["complete"])
+
+    def test_daily_consumption_ignores_counter_decrease(self):
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        rows = [
+            {"timestamp": "2026-10-16T08:00:00+00:00", "value": 50.0},
+            {"timestamp": "2026-10-16T09:00:00+00:00", "value": 10.0},
+            {"timestamp": "2026-10-16T10:00:00+00:00", "value": 10.5},
+        ]
+
+        days = daily_consumption(rows, timezone.utc, 1, now)
+
+        self.assertEqual(days[0]["kwh"], 0.5)
+
+    def test_temperature_trend(self):
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        rows = [
+            {"timestamp": (now - timedelta(minutes=m)).isoformat(), "value": 50.0 - m / 10}
+            for m in (60, 20, 15, 10, 5, 0)
+        ]
+
+        # 0,1 °C na minutę = 6 °C/h; odczyt sprzed godziny jest poza oknem
+        self.assertEqual(temperature_trend(rows, now), 6.0)
+        self.assertIsNone(temperature_trend(rows[:2], now))
+
 
 class DatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -289,6 +338,77 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         device = await db.create_device(user, "Stare urządzenie", "tok-stary", "prad")
 
         self.assertEqual(device["device_type"], "prad")
+
+    async def test_update_device_name_and_price(self):
+        alice = await db.create_user("alice@x.pl", "h")
+        bob = await db.create_user("bob@x.pl", "h")
+        device = await db.create_device(alice, "Licznik", "tok1", "prad")
+
+        self.assertIsNone(device["price_per_kwh"])
+
+        updated = await db.update_device(alice, device["id"], {"name": "Dom", "price_per_kwh": 1.1})
+        self.assertEqual(updated["name"], "Dom")
+        self.assertEqual(updated["price_per_kwh"], 1.1)
+
+        # cudze urządzenie: brak zmian i brak dostępu
+        self.assertIsNone(await db.update_device(bob, device["id"], {"name": "Hack"}))
+        self.assertEqual((await db.get_device(alice, device["id"]))["name"], "Dom")
+
+        # nieznane pola są ignorowane, cenę można wyczyścić
+        updated = await db.update_device(alice, device["id"], {"token": "x", "price_per_kwh": None})
+        self.assertEqual(updated["token"], "tok1")
+        self.assertIsNone(updated["price_per_kwh"])
+
+    async def test_hourly_last_stats_and_last_seen(self):
+        user = await db.create_user("a@b.pl", "h")
+        device = await db.create_device(user, "Licznik", "tok1", "prad")
+        base = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=3)
+
+        async with db._db() as conn:
+            for minutes, value in ((5, 1.0), (40, 2.0), (65, 3.0), (90, 4.0)):
+                await conn.execute(
+                    "INSERT INTO readings (device_id, timestamp, metric, value) VALUES (?, ?, 'kwh', ?)",
+                    (device["id"], (base + timedelta(minutes=minutes)).isoformat(), value),
+                )
+            await conn.commit()
+
+        rows = await db.get_hourly_last(device["id"], "kwh", base - timedelta(hours=1))
+        self.assertEqual([r["value"] for r in rows], [2.0, 4.0])
+
+        stats = await db.get_stats(device["id"], "kwh", base - timedelta(hours=1))
+        self.assertEqual((stats["count"], stats["min"], stats["max"]), (4, 1.0, 4.0))
+        self.assertEqual(stats["avg"], 2.5)
+
+        last_seen = await db.load_last_seen()
+        expected = (base + timedelta(minutes=90)).timestamp()
+        self.assertAlmostEqual(last_seen["tok1"], expected, places=3)
+
+    async def test_init_db_adds_price_column_to_old_database(self):
+        async with db._db() as conn:
+            await conn.execute("DROP TABLE devices")
+            await conn.execute("""
+                CREATE TABLE devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    device_type TEXT NOT NULL DEFAULT 'prad',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await conn.execute(
+                "INSERT INTO users (email, password_hash, created_at) VALUES ('s@x.pl', 'h', '2026-01-01')"
+            )
+            await conn.execute(
+                "INSERT INTO devices (user_id, name, token, created_at) VALUES (1, 'Stary', 'tok-old', '2026-01-01')"
+            )
+            await conn.commit()
+
+        await db.init_db()
+
+        devices = await db.list_devices(1)
+        self.assertEqual(devices[0]["name"], "Stary")
+        self.assertIsNone(devices[0]["price_per_kwh"])
 
 
 if __name__ == "__main__":
