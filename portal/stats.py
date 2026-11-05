@@ -3,35 +3,136 @@ from datetime import datetime, timedelta
 
 
 def downsample(data, max_points: int):
+    """Zmniejsza liczbę punktów, zachowując szczyty i doliny.
+
+    Z każdego fragmentu zostają punkty minimum i maksimum (w kolejności czasu).
+    Uśrednianie fragmentów spłaszczało krótkie skoki mocy – wykres pokazywał
+    wyraźnie mniej niż rzeczywisty szczyt.
+    """
     if len(data) <= max_points:
         return data
 
-    chunk = math.ceil(len(data) / max_points)
+    chunk = math.ceil(len(data) / max(1, max_points // 2))
     result = []
 
     for i in range(0, len(data), chunk):
         part = data[i:i + chunk]
-        result.append({
-            "timestamp": part[-1]["timestamp"],
-            "value": sum(p["value"] for p in part) / len(part),
-        })
+        low = min(range(len(part)), key=lambda k: part[k]["value"])
+        high = max(range(len(part)), key=lambda k: part[k]["value"])
+
+        for k in sorted({low, high}):
+            result.append(part[k])
 
     return result
 
 
-def hourly_consumption(rows, hours: int):
+# Przerwa w danych dłuższa niż to nie jest doliczana do średniej mocy
+POWER_GAP_LIMIT_S = 600
+
+# Próg „dużych odbiorników" (czajnik, piekarnik, pralka...)
+HIGH_POWER_W = 1000.0
+
+
+def power_stats(rows, now: datetime):
+    """Statystyki mocy chwilowej z odczytów rosnących w czasie.
+
+    Średnia jest ważona czasem (każdy odczyt „trwa" do następnego), bo
+    urządzenie wysyła próbki nierównomiernie – zwykła średnia z próbek
+    zawyżałaby ją, gdy przy dużym poborze raportuje częściej.
+    """
+    if not rows:
+        return {"count": 0, "max": None, "max_at": None, "avg": None, "hours_above": None}
+
+    peak = max(rows, key=lambda r: r["value"])
+
+    weighted = 0.0
+    total = 0.0
+    above = 0.0
+
+    for index, row in enumerate(rows):
+        start = datetime.fromisoformat(row["timestamp"])
+        end = datetime.fromisoformat(rows[index + 1]["timestamp"]) if index + 1 < len(rows) else now
+        seconds = min((end - start).total_seconds(), POWER_GAP_LIMIT_S)
+
+        if seconds <= 0:
+            continue
+
+        weighted += row["value"] * seconds
+        total += seconds
+
+        if row["value"] >= HIGH_POWER_W:
+            above += seconds
+
+    avg = weighted / total if total > 0 else sum(r["value"] for r in rows) / len(rows)
+
+    return {
+        "count": len(rows),
+        "max": peak["value"],
+        "max_at": peak["timestamp"],
+        "avg": avg,
+        "hours_above": above / 3600,
+    }
+
+
+# Noc: godziny lokalne [22:00, 06:00)
+NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5}
+
+
+def usage_pattern(hourly, tz):
+    """Typowy rozkład zużycia w ciągu doby z godzinowych przyrostów (`hourly_consumption`).
+
+    Zwraca godzinę o najwyższym średnim zużyciu oraz udział nocy w całym
+    zużyciu. Przy zbyt małej ilości danych – wartości None.
+    """
+    if len(hourly) < 24:
+        return {"peak_hour": None, "peak_hour_w": None, "night_share_pct": None}
+
+    by_hour = {}
+    night = 0.0
+    total = 0.0
+
+    for item in hourly:
+        local = datetime.fromisoformat(item["hour"]).astimezone(tz)
+
+        by_hour.setdefault(local.hour, []).append(item["kwh"])
+        total += item["kwh"]
+
+        if local.hour in NIGHT_HOURS:
+            night += item["kwh"]
+
+    peak_hour = max(by_hour, key=lambda h: sum(by_hour[h]) / len(by_hour[h]))
+    peak_w = sum(by_hour[peak_hour]) / len(by_hour[peak_hour]) * 1000
+
+    return {
+        "peak_hour": peak_hour,
+        "peak_hour_w": round(peak_w, 0),
+        "night_share_pct": round(night / total * 100, 0) if total > 0 else None,
+    }
+
+
+# Ostatni odczyt godziny musi paść po tej minucie, żeby uznać godzinę za pełną
+COMPLETE_HOUR_MINUTE = 50
+
+
+def hourly_consumption(rows, hours: int, complete_only: bool = False):
     """Zużycie w kolejnych godzinach z różnic stanu licznika (kWh).
 
     Dla każdej godziny bierzemy ostatni odczyt i odejmujemy ostatni odczyt
     z poprzedniej godziny. Godziny po przerwie w danych są pomijane, żeby
     zużycie z kilku godzin nie wylądowało w jednym słupku.
+
+    Z `complete_only` zostają tylko godziny, w których oba odczyty graniczne
+    leżą blisko pełnej godziny. Bez tego bieżąca (jeszcze trwająca) godzina
+    i godziny z dziurą w danych wyglądałyby na znacznie mniejsze zużycie.
     """
     buckets = {}
+    ends = {}
 
     for row in rows:
         ts = datetime.fromisoformat(row["timestamp"])
         hour = ts.replace(minute=0, second=0, microsecond=0)
         buckets[hour] = row["value"]
+        ends[hour] = ts
 
     result = []
     previous_hour = None
@@ -40,7 +141,17 @@ def hourly_consumption(rows, hours: int):
     for hour in sorted(buckets):
         value = buckets[hour]
 
-        if previous_hour is not None and hour - previous_hour == timedelta(hours=1):
+        if (
+            previous_hour is not None
+            and hour - previous_hour == timedelta(hours=1)
+            and (
+                not complete_only
+                or (
+                    ends[hour].minute >= COMPLETE_HOUR_MINUTE
+                    and ends[previous_hour].minute >= COMPLETE_HOUR_MINUTE
+                )
+            )
+        ):
             result.append({
                 "hour": hour.isoformat(),
                 "kwh": round(max(0.0, value - previous_value), 3),

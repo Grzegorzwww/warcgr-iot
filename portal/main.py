@@ -26,7 +26,14 @@ from portal.security import (
     normalize_email,
     verify_password,
 )
-from portal.stats import daily_consumption, downsample, hourly_consumption, temperature_trend
+from portal.stats import (
+    daily_consumption,
+    downsample,
+    hourly_consumption,
+    power_stats,
+    temperature_trend,
+    usage_pattern,
+)
 
 
 load_dotenv()
@@ -426,10 +433,16 @@ async def energy_summary(device: dict, now: datetime) -> dict:
 
     # Pobór w tle: średni pobór w najspokojniejszej godzinie ostatniej doby
     recent = [r for r in rows if datetime.fromisoformat(r["timestamp"]) >= now - timedelta(hours=26)]
-    hourly = hourly_consumption(recent, 24)
+    hourly = hourly_consumption(recent, 24, complete_only=True)
     base_load_w = min(h["kwh"] for h in hourly) * 1000 if len(hourly) >= 6 else None
 
-    power = await db.get_stats(device["id"], "power_w", now - timedelta(hours=24))
+    pattern = usage_pattern(hourly_consumption(rows, SUMMARY_DAYS * 24, complete_only=True), LOCAL_TZ)
+
+    complete_days = [d for d in days if d["complete"]]
+    busiest_day = max(complete_days, key=lambda d: d["kwh"], default=None)
+
+    power_rows = await db.get_readings(device["id"], "power_w", now - timedelta(hours=24))
+    power = power_stats(power_rows, now)
 
     return {
         "device_type": "prad",
@@ -440,8 +453,14 @@ async def energy_summary(device: dict, now: datetime) -> dict:
         "month_forecast_kwh": _rounded(avg_daily * 30 if avg_daily is not None else None, 1),
         "base_load_w": _rounded(base_load_w, 0),
         "power_max_24h": _rounded(power["max"], 0),
+        "power_max_at": power["max_at"],
         "power_avg_24h": _rounded(power["avg"], 0),
         "price_per_kwh": device.get("price_per_kwh"),
+        "insights": {
+            **pattern,
+            "busiest_day": busiest_day,
+            "hours_above_1kw": _rounded(power["hours_above"], 2),
+        },
     }
 
 

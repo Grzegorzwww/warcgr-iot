@@ -16,7 +16,14 @@ from portal.security import (
     normalize_email,
     verify_password,
 )
-from portal.stats import daily_consumption, downsample, hourly_consumption, temperature_trend
+from portal.stats import (
+    daily_consumption,
+    downsample,
+    hourly_consumption,
+    power_stats,
+    temperature_trend,
+    usage_pattern,
+)
 
 
 class SecurityTests(unittest.TestCase):
@@ -180,6 +187,69 @@ class StatsTests(unittest.TestCase):
 
         self.assertLessEqual(len(downsample(data, 100)), 100)
         self.assertEqual(downsample(data[:5], 100), data[:5])
+
+    def test_downsample_keeps_peaks(self):
+        data = [{"timestamp": str(i), "value": 100.0} for i in range(5000)]
+        data[2345]["value"] = 3795.0
+        data[4000]["value"] = 5.0
+
+        result = downsample(data, 300)
+
+        self.assertLessEqual(len(result), 300)
+        self.assertEqual(max(p["value"] for p in result), 3795.0)
+        self.assertEqual(min(p["value"] for p in result), 5.0)
+        self.assertEqual([p["timestamp"] for p in result], sorted((p["timestamp"] for p in result), key=int))
+
+    def test_power_stats_time_weighted(self):
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        # 1 W przez 9 minut, potem 2000 W przez 1 minutę (z gęstymi próbkami)
+        rows = [{"timestamp": "2026-10-16T11:50:00+00:00", "value": 100.0}]
+        rows += [
+            {"timestamp": (datetime(2026, 10, 16, 11, 59, tzinfo=timezone.utc) + timedelta(seconds=s)).isoformat(),
+             "value": 2000.0}
+            for s in range(0, 60, 5)
+        ]
+
+        stats = power_stats(rows, now)
+
+        self.assertEqual(stats["max"], 2000.0)
+        self.assertEqual(stats["max_at"], rows[1]["timestamp"])
+        # średnia ważona czasem: (100*540 + 2000*60) / 600 = 290, a nie ~1900 z samych próbek
+        self.assertAlmostEqual(stats["avg"], 290.0, delta=1.0)
+        self.assertAlmostEqual(stats["hours_above"], 60 / 3600, places=4)
+        self.assertEqual(power_stats([], now)["max"], None)
+
+    def test_hourly_consumption_complete_only(self):
+        rows = [
+            {"timestamp": "2026-10-16T09:58:00+00:00", "value": 10.0},
+            {"timestamp": "2026-10-16T10:58:00+00:00", "value": 10.3},
+            {"timestamp": "2026-10-16T11:59:00+00:00", "value": 10.6},
+            # bieżąca, niepełna godzina
+            {"timestamp": "2026-10-16T12:05:00+00:00", "value": 10.62},
+        ]
+
+        self.assertEqual(len(hourly_consumption(rows, 24)), 3)
+
+        complete = hourly_consumption(rows, 24, complete_only=True)
+
+        self.assertEqual([h["kwh"] for h in complete], [0.3, 0.3])
+
+    def test_usage_pattern(self):
+        tz = ZoneInfo("Europe/Warsaw")
+        base = datetime(2026, 10, 14, 0, 0, tzinfo=timezone.utc)
+        hourly = []
+
+        for i in range(48):
+            hour = base + timedelta(hours=i)
+            local_hour = hour.astimezone(tz).hour
+            hourly.append({"hour": hour.isoformat(), "kwh": 0.5 if local_hour == 19 else 0.1})
+
+        pattern = usage_pattern(hourly, tz)
+
+        self.assertEqual(pattern["peak_hour"], 19)
+        self.assertEqual(pattern["peak_hour_w"], 500.0)
+        self.assertIsNotNone(pattern["night_share_pct"])
+        self.assertIsNone(usage_pattern(hourly[:5], tz)["peak_hour"])
 
     def test_daily_consumption_sums_per_local_day(self):
         tz = ZoneInfo("Europe/Warsaw")

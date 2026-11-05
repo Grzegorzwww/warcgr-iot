@@ -928,6 +928,7 @@ function renderEnergySummary(device) {
     if (!summary || summary.device_type !== "prad") {
         ["m-today", "m-yesterday", "m-month", "m-base", "m-peak"].forEach(id => { $(id).textContent = "--"; });
         ["m-today-sub", "m-yesterday-sub", "m-month-sub", "m-peak-sub"].forEach(id => { $(id).textContent = ""; });
+        $("insights-panel").hidden = true;
         return;
     }
 
@@ -948,9 +949,115 @@ function renderEnergySummary(device) {
         : "potrzeba kilku godzin danych";
 
     $("m-peak").textContent = fmt(summary.power_max_24h, 0);
-    $("m-peak-sub").textContent = isNumber(summary.power_avg_24h)
-        ? `średnio ${fmt(summary.power_avg_24h, 0)} W`
-        : "";
+
+    const peakParts = [];
+
+    if (isNumber(summary.power_max_24h) && summary.power_max_at) {
+        const at = new Date(parseTime(summary.power_max_at));
+
+        peakParts.push(`o ${at.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`);
+    }
+
+    if (isNumber(summary.power_avg_24h)) {
+        peakParts.push(`średnio ${fmt(summary.power_avg_24h, 0)} W`);
+    }
+
+    $("m-peak-sub").textContent = peakParts.join(" · ");
+
+    renderInsights(summary, price);
+}
+
+
+const CO2_KG_PER_KWH = 0.7; // szacunkowy współczynnik emisji dla polskiego miksu energetycznego
+
+function durationText(hours) {
+    const totalMinutes = Math.round(hours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+
+    if (h === 0) {
+        return `${m} min`;
+    }
+
+    return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+function buildInsights(summary, price) {
+    const facts = [];
+    const insights = summary.insights || {};
+    const cost = kwh => (price !== null ? ` (${money(kwh * price)})` : "");
+    const pad = h => String(h).padStart(2, "0");
+
+    if (isNumber(insights.peak_hour)) {
+        const h = Number(insights.peak_hour);
+
+        facts.push(["Godzina szczytu", `Najwięcej prądu zużywasz zwykle między ${pad(h)}:00 a ${pad((h + 1) % 24)}:00 – średnio ${fmt(insights.peak_hour_w, 0)} W.`]);
+    }
+
+    if (isNumber(insights.night_share_pct)) {
+        facts.push(["Noc", `Na noc (22:00–6:00) przypada ${fmt(insights.night_share_pct, 0)}% Twojego zużycia.`]);
+    }
+
+    if (insights.busiest_day && isNumber(insights.busiest_day.kwh)) {
+        const [y, m, d] = insights.busiest_day.date.split("-").map(Number);
+        const label = new Date(y, m - 1, d).toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "long" });
+
+        facts.push(["Rekordowy dzień", `Najwięcej prądu zużyto: ${label} – ${fmt(insights.busiest_day.kwh, 2)} kWh${cost(insights.busiest_day.kwh)}.`]);
+    }
+
+    if (isNumber(insights.hours_above_1kw)) {
+        facts.push([
+            "Duże odbiorniki",
+            insights.hours_above_1kw < 1 / 60
+                ? "W ostatniej dobie nic nie pobierało więcej niż 1 kW."
+                : `W ostatniej dobie odbiorniki powyżej 1 kW pracowały łącznie ${durationText(insights.hours_above_1kw)}.`
+        ]);
+    }
+
+    if (isNumber(summary.power_max_24h) && isNumber(summary.power_avg_24h) && Number(summary.power_avg_24h) > 0) {
+        facts.push(["Skoki mocy", `Szczyt mocy był ${fmt(summary.power_max_24h / summary.power_avg_24h, 1)}× wyższy niż średni pobór.`]);
+    }
+
+    if (isNumber(summary.base_load_w) && Number(summary.base_load_w) > 0) {
+        const yearKwh = Number(summary.base_load_w) * 8.76;
+        const share = isNumber(summary.avg_daily_kwh) && Number(summary.avg_daily_kwh) > 0
+            ? Number(summary.base_load_w) * 24 / 1000 / Number(summary.avg_daily_kwh) * 100
+            : null;
+
+        facts.push([
+            "Pobór w tle",
+            `Urządzenia w gotowości i pracujące non stop biorą ${fmt(summary.base_load_w, 0)} W`
+                + (share !== null ? ` – ok. ${fmt(Math.min(share, 100), 0)}% całego zużycia` : "")
+                + `, czyli ok. ${fmt(yearKwh, 0)} kWh rocznie${cost(yearKwh)}.`
+        ]);
+    }
+
+    if (isNumber(summary.avg_daily_kwh)) {
+        const yearKwh = Number(summary.avg_daily_kwh) * 365;
+
+        facts.push(["Prognoza roczna", `Przy takim tempie w ciągu roku zużyjesz ok. ${fmt(yearKwh, 0)} kWh${cost(yearKwh)}.`]);
+    }
+
+    if (isNumber(summary.month_forecast_kwh)) {
+        facts.push(["Ślad węglowy", `Prognozowane zużycie na miesiąc to szacunkowo ${fmt(Number(summary.month_forecast_kwh) * CO2_KG_PER_KWH, 0)} kg CO₂.`]);
+    }
+
+    return facts;
+}
+
+function renderInsights(summary, price) {
+    const facts = buildInsights(summary, price);
+
+    $("insights-list").replaceChildren(...facts.map(([title, text]) => {
+        const item = document.createElement("li");
+        const strong = document.createElement("strong");
+
+        strong.textContent = title;
+        item.append(strong, ` ${text}`);
+
+        return item;
+    }));
+    $("insights-panel").hidden = facts.length === 0;
 }
 
 
