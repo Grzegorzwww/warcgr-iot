@@ -219,6 +219,11 @@ class StatsTests(unittest.TestCase):
         self.assertAlmostEqual(stats["hours_above"], 60 / 3600, places=4)
         self.assertEqual(power_stats([], now)["max"], None)
 
+        bands = {b["label"]: b["hours"] for b in stats["bands"]}
+
+        self.assertAlmostEqual(bands["> 2 kW"], 60 / 3600, places=2)
+        self.assertAlmostEqual(bands["100–500 W"], 540 / 3600, places=2)
+
     def test_hourly_consumption_complete_only(self):
         rows = [
             {"timestamp": "2026-10-16T09:58:00+00:00", "value": 10.0},
@@ -248,6 +253,8 @@ class StatsTests(unittest.TestCase):
 
         self.assertEqual(pattern["peak_hour"], 19)
         self.assertEqual(pattern["peak_hour_w"], 500.0)
+        self.assertEqual(len(pattern["profile_w"]), 24)
+        self.assertEqual(pattern["profile_w"][19], 500.0)
         self.assertIsNotNone(pattern["night_share_pct"])
         self.assertIsNone(usage_pattern(hourly[:5], tz)["peak_hour"])
 

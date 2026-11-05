@@ -928,7 +928,7 @@ function renderEnergySummary(device) {
     if (!summary || summary.device_type !== "prad") {
         ["m-today", "m-yesterday", "m-month", "m-base", "m-peak"].forEach(id => { $(id).textContent = "--"; });
         ["m-today-sub", "m-yesterday-sub", "m-month-sub", "m-peak-sub"].forEach(id => { $(id).textContent = ""; });
-        $("insights-panel").hidden = true;
+        $("extra-stats").hidden = true;
         return;
     }
 
@@ -968,8 +968,6 @@ function renderEnergySummary(device) {
 }
 
 
-const CO2_KG_PER_KWH = 0.7; // szacunkowy współczynnik emisji dla polskiego miksu energetycznego
-
 function durationText(hours) {
     const totalMinutes = Math.round(hours * 60);
     const h = Math.floor(totalMinutes / 60);
@@ -982,40 +980,41 @@ function durationText(hours) {
     return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
-function buildInsights(summary, price) {
-    const facts = [];
+// Karty dodatkowych statystyk: [etykieta, wartość, jednostka, opis]
+function buildExtraCards(summary, price) {
+    const cards = [];
     const insights = summary.insights || {};
-    const cost = kwh => (price !== null ? ` (${money(kwh * price)})` : "");
+    const cost = kwh => (price !== null ? money(kwh * price) : "");
     const pad = h => String(h).padStart(2, "0");
 
     if (isNumber(insights.peak_hour)) {
         const h = Number(insights.peak_hour);
 
-        facts.push(["Godzina szczytu", `Najwięcej prądu zużywasz zwykle między ${pad(h)}:00 a ${pad((h + 1) % 24)}:00 – średnio ${fmt(insights.peak_hour_w, 0)} W.`]);
+        cards.push(["Godzina szczytu", `${pad(h)}–${pad((h + 1) % 24)}`, "", `zwykle średnio ${fmt(insights.peak_hour_w, 0)} W`]);
     }
 
     if (isNumber(insights.night_share_pct)) {
-        facts.push(["Noc", `Na noc (22:00–6:00) przypada ${fmt(insights.night_share_pct, 0)}% Twojego zużycia.`]);
+        cards.push(["Zużycie nocą", fmt(insights.night_share_pct, 0), "%", "udział w godzinach 22:00–6:00"]);
     }
 
     if (insights.busiest_day && isNumber(insights.busiest_day.kwh)) {
         const [y, m, d] = insights.busiest_day.date.split("-").map(Number);
-        const label = new Date(y, m - 1, d).toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "long" });
+        const label = new Date(y, m - 1, d).toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "numeric" });
 
-        facts.push(["Rekordowy dzień", `Najwięcej prądu zużyto: ${label} – ${fmt(insights.busiest_day.kwh, 2)} kWh${cost(insights.busiest_day.kwh)}.`]);
+        cards.push(["Rekordowy dzień", fmt(insights.busiest_day.kwh, 2), "kWh", [label, cost(insights.busiest_day.kwh)].filter(Boolean).join(" · ")]);
     }
 
     if (isNumber(insights.hours_above_1kw)) {
-        facts.push([
+        cards.push([
             "Duże odbiorniki",
-            insights.hours_above_1kw < 1 / 60
-                ? "W ostatniej dobie nic nie pobierało więcej niż 1 kW."
-                : `W ostatniej dobie odbiorniki powyżej 1 kW pracowały łącznie ${durationText(insights.hours_above_1kw)}.`
+            insights.hours_above_1kw < 1 / 60 ? "0" : durationText(insights.hours_above_1kw),
+            "",
+            "czas poboru powyżej 1 kW w 24 h"
         ]);
     }
 
     if (isNumber(summary.power_max_24h) && isNumber(summary.power_avg_24h) && Number(summary.power_avg_24h) > 0) {
-        facts.push(["Skoki mocy", `Szczyt mocy był ${fmt(summary.power_max_24h / summary.power_avg_24h, 1)}× wyższy niż średni pobór.`]);
+        cards.push(["Szczyt do średniej", fmt(summary.power_max_24h / summary.power_avg_24h, 1), "×", "im więcej, tym bardziej skokowy pobór"]);
     }
 
     if (isNumber(summary.base_load_w) && Number(summary.base_load_w) > 0) {
@@ -1024,40 +1023,77 @@ function buildInsights(summary, price) {
             ? Number(summary.base_load_w) * 24 / 1000 / Number(summary.avg_daily_kwh) * 100
             : null;
 
-        facts.push([
-            "Pobór w tle",
-            `Urządzenia w gotowości i pracujące non stop biorą ${fmt(summary.base_load_w, 0)} W`
-                + (share !== null ? ` – ok. ${fmt(Math.min(share, 100), 0)}% całego zużycia` : "")
-                + `, czyli ok. ${fmt(yearKwh, 0)} kWh rocznie${cost(yearKwh)}.`
+        cards.push([
+            "Pobór w tle rocznie",
+            fmt(yearKwh, 0),
+            "kWh",
+            [share !== null ? `${fmt(Math.min(share, 100), 0)}% zużycia` : "", cost(yearKwh)].filter(Boolean).join(" · ")
         ]);
     }
 
     if (isNumber(summary.avg_daily_kwh)) {
         const yearKwh = Number(summary.avg_daily_kwh) * 365;
 
-        facts.push(["Prognoza roczna", `Przy takim tempie w ciągu roku zużyjesz ok. ${fmt(yearKwh, 0)} kWh${cost(yearKwh)}.`]);
+        cards.push(["Prognoza roczna", fmt(yearKwh, 0), "kWh", cost(yearKwh)]);
     }
 
-    if (isNumber(summary.month_forecast_kwh)) {
-        facts.push(["Ślad węglowy", `Prognozowane zużycie na miesiąc to szacunkowo ${fmt(Number(summary.month_forecast_kwh) * CO2_KG_PER_KWH, 0)} kg CO₂.`]);
-    }
-
-    return facts;
+    return cards;
 }
 
 function renderInsights(summary, price) {
-    const facts = buildInsights(summary, price);
+    const cards = buildExtraCards(summary, price);
+    const insights = summary.insights || {};
+    const profile = insights.profile_w;
+    const bands = Array.isArray(insights.power_bands) ? insights.power_bands : null;
+    const hasProfile = Array.isArray(profile) && profile.some(isNumber);
+    const hasBands = bands !== null && bands.some(b => b.hours > 0);
 
-    $("insights-list").replaceChildren(...facts.map(([title, text]) => {
-        const item = document.createElement("li");
-        const strong = document.createElement("strong");
+    $("extra-cards").replaceChildren(...cards.map(([label, value, unit, sub]) => {
+        const card = document.createElement("div");
+        const labelNode = document.createElement("div");
+        const valueNode = document.createElement("div");
+        const subNode = document.createElement("div");
 
-        strong.textContent = title;
-        item.append(strong, ` ${text}`);
+        card.className = "card";
+        labelNode.className = "card-label";
+        valueNode.className = "card-value";
+        subNode.className = "card-sub";
 
-        return item;
+        labelNode.textContent = label;
+        valueNode.textContent = value;
+
+        if (unit) {
+            const unitNode = document.createElement("span");
+
+            unitNode.className = "unit";
+            unitNode.textContent = unit;
+            valueNode.append(unitNode);
+        }
+
+        subNode.textContent = sub;
+        card.append(labelNode, valueNode, subNode);
+
+        return card;
     }));
-    $("insights-panel").hidden = facts.length === 0;
+
+    $("extra-stats").hidden = cards.length === 0 && !hasProfile && !hasBands;
+    $("panel-profile").hidden = !hasProfile;
+    $("panel-bands").hidden = !hasBands;
+
+    if (charts.profile && hasProfile) {
+        const peak = Number(insights.peak_hour);
+
+        charts.profile.data.labels = profile.map((_, h) => String(h).padStart(2, "0"));
+        charts.profile.data.datasets[0].data = profile;
+        charts.profile.data.datasets[0].backgroundColor = profile.map((_, h) => (h === peak ? "#f97316" : "#f59e0b99"));
+        charts.profile.update();
+    }
+
+    if (charts.bands && hasBands) {
+        charts.bands.data.labels = bands.map(b => b.label);
+        charts.bands.data.datasets[0].data = bands.map(b => b.hours);
+        charts.bands.update();
+    }
 }
 
 
@@ -1214,6 +1250,64 @@ function initCharts() {
             scales: {
                 x: { ticks: { ...ticks, maxRotation: 0 }, grid: { display: false } },
                 y: { beginAtZero: true, ticks, grid: { color: grid } }
+            }
+        }
+    });
+
+    charts.profile = new Chart($("chart-profile"), {
+        type: "bar",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "średnia moc",
+                data: [],
+                backgroundColor: "#f59e0b99",
+                borderRadius: 3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: items => `${items[0].label}:00–${String((Number(items[0].label) + 1) % 24).padStart(2, "0")}:00`,
+                        label: item => ` średnio ${fmt(item.parsed.y, 0)} W`
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { ...ticks, maxTicksLimit: 12, maxRotation: 0 }, grid: { display: false } },
+                y: { beginAtZero: true, ticks, grid: { color: grid } }
+            }
+        }
+    });
+
+    charts.bands = new Chart($("chart-bands"), {
+        type: "bar",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "Czas",
+                data: [],
+                backgroundColor: ["#38bdf8", "#22c55e", "#facc15", "#f97316", "#ef4444"],
+                borderRadius: 4
+            }]
+        },
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: item => ` ${durationText(item.parsed.x)}` } }
+            },
+            scales: {
+                x: { beginAtZero: true, ticks: { ...ticks, callback: v => `${v} h` }, grid: { color: grid } },
+                y: { ticks, grid: { display: false } }
             }
         }
     });

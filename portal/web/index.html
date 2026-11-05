@@ -195,9 +195,20 @@
                         <div class="row" id="d-pulses-row" hidden><span class="card-label">Impulsy</span><span id="d-pulses" class="badge">--</span></div>
                     </details>
 
-                    <div class="panel" id="insights-panel" hidden>
-                        <h3>Ciekawostki</h3>
-                        <ul class="insights" id="insights-list"></ul>
+                    <div id="extra-stats" hidden>
+                        <h2 class="section-title">Dodatkowe statystyki</h2>
+
+                        <div class="cards" id="extra-cards"></div>
+
+                        <div class="panel" id="panel-profile">
+                            <h3>Typowy dzień – średnia moc wg godziny</h3>
+                            <div class="chart-box"><canvas id="chart-profile"></canvas></div>
+                        </div>
+
+                        <div class="panel" id="panel-bands">
+                            <h3>Jak długo pracowały odbiorniki – ostatnie 24 h</h3>
+                            <div class="chart-box short"><canvas id="chart-bands"></canvas></div>
+                        </div>
                     </div>
                 </div>
 

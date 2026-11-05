@@ -32,6 +32,15 @@ POWER_GAP_LIMIT_S = 600
 # Próg „dużych odbiorników" (czajnik, piekarnik, pralka...)
 HIGH_POWER_W = 1000.0
 
+# Przedziały mocy do rozkładu czasu pracy: (od W włącznie, do W wyłącznie, etykieta)
+POWER_BANDS = [
+    (0, 100, "< 100 W"),
+    (100, 500, "100–500 W"),
+    (500, 1000, "0,5–1 kW"),
+    (1000, 2000, "1–2 kW"),
+    (2000, float("inf"), "> 2 kW"),
+]
+
 
 def power_stats(rows, now: datetime):
     """Statystyki mocy chwilowej z odczytów rosnących w czasie.
@@ -41,13 +50,14 @@ def power_stats(rows, now: datetime):
     zawyżałaby ją, gdy przy dużym poborze raportuje częściej.
     """
     if not rows:
-        return {"count": 0, "max": None, "max_at": None, "avg": None, "hours_above": None}
+        return {"count": 0, "max": None, "max_at": None, "avg": None, "hours_above": None, "bands": None}
 
     peak = max(rows, key=lambda r: r["value"])
 
     weighted = 0.0
     total = 0.0
     above = 0.0
+    band_seconds = [0.0] * len(POWER_BANDS)
 
     for index, row in enumerate(rows):
         start = datetime.fromisoformat(row["timestamp"])
@@ -63,6 +73,11 @@ def power_stats(rows, now: datetime):
         if row["value"] >= HIGH_POWER_W:
             above += seconds
 
+        for index_band, (low, high, _) in enumerate(POWER_BANDS):
+            if low <= row["value"] < high:
+                band_seconds[index_band] += seconds
+                break
+
     avg = weighted / total if total > 0 else sum(r["value"] for r in rows) / len(rows)
 
     return {
@@ -71,6 +86,10 @@ def power_stats(rows, now: datetime):
         "max_at": peak["timestamp"],
         "avg": avg,
         "hours_above": above / 3600,
+        "bands": [
+            {"label": label, "hours": round(band_seconds[i] / 3600, 2)}
+            for i, (_, _, label) in enumerate(POWER_BANDS)
+        ],
     }
 
 
@@ -81,11 +100,12 @@ NIGHT_HOURS = {22, 23, 0, 1, 2, 3, 4, 5}
 def usage_pattern(hourly, tz):
     """Typowy rozkład zużycia w ciągu doby z godzinowych przyrostów (`hourly_consumption`).
 
-    Zwraca godzinę o najwyższym średnim zużyciu oraz udział nocy w całym
-    zużyciu. Przy zbyt małej ilości danych – wartości None.
+    Zwraca godzinę o najwyższym średnim zużyciu, udział nocy w całym zużyciu
+    i profil dobowy (średnia moc w W dla każdej godziny lokalnej 0–23).
+    Przy zbyt małej ilości danych – wartości None.
     """
     if len(hourly) < 24:
-        return {"peak_hour": None, "peak_hour_w": None, "night_share_pct": None}
+        return {"peak_hour": None, "peak_hour_w": None, "night_share_pct": None, "profile_w": None}
 
     by_hour = {}
     night = 0.0
@@ -107,6 +127,10 @@ def usage_pattern(hourly, tz):
         "peak_hour": peak_hour,
         "peak_hour_w": round(peak_w, 0),
         "night_share_pct": round(night / total * 100, 0) if total > 0 else None,
+        "profile_w": [
+            round(sum(by_hour[h]) / len(by_hour[h]) * 1000, 0) if h in by_hour else None
+            for h in range(24)
+        ],
     }
 
 

@@ -460,6 +460,7 @@ async def energy_summary(device: dict, now: datetime) -> dict:
             **pattern,
             "busiest_day": busiest_day,
             "hours_above_1kw": _rounded(power["hours_above"], 2),
+            "power_bands": power["bands"],
         },
     }
 
